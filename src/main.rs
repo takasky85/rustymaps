@@ -191,7 +191,7 @@ impl App {
                         None
                     }
                 };
-                Plane { def, route: Route::of(def), sim: Sim::new(0.35), show: true, radius_m }
+                Plane { def, route: Route::of(def), sim: Sim::new(0.35), show: false, radius_m }
             })
             .collect();
 
