@@ -1,0 +1,25 @@
+[package]
+name = "rustymaps"
+version = "0.1.0"
+edition = "2021"
+description = "Proof of concept: 3D globe that zooms into a flat vector map (OpenFreeMap), Rust + egui + wgpu"
+license = "MIT"
+
+[dependencies]
+# egui 0.32 pairs with wgpu 25. Pinned on purpose: newer releases changed the wgpu API.
+eframe = { version = "0.32.3", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
+# Same wgpu that eframe uses (cargo unifies them); listed so graphics backends are always enabled.
+wgpu = "25"
+# Plain blocking HTTP client; tiles are fetched on worker threads.
+ureq = "3"
+# Polygon triangulation for map fills.
+earcutr = "0.5"
+# Some tile responses may be gzip-compressed.
+flate2 = "1"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+debug = false

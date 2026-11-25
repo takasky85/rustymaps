@@ -1,0 +1,45 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Caches ~/.cargo and target/ between runs; makes every build after the first much faster.
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build (release)
+        shell: pwsh
+        run: |
+          $t = Measure-Command { cargo build --release 2>&1 | ForEach-Object { "$_" } }
+          "Release build took $([math]::Round($t.TotalSeconds)) s" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          if (-not (Test-Path target/release/rustymaps.exe)) { throw "build failed" }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $stamp = Get-Date -Format "yyMMddHHmm"
+          $name = "rustymaps$stamp"
+          New-Item -ItemType Directory -Path dist/$name | Out-Null
+          Copy-Item target/release/rustymaps.exe dist/$name/
+          Copy-Item README.md dist/$name/
+          Compress-Archive -Path dist/$name/* -DestinationPath "dist/$name.zip"
+          "ZIP_NAME=$name.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustymaps-windows
+          path: dist/${{ env.ZIP_NAME }}
+
+      # Unit tests (map decoding, meshing, camera maths); reuses the release dependencies.
+      - name: Test
+        run: cargo test --release
