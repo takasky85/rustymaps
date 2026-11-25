@@ -13,7 +13,6 @@ use crate::camera::{dot, Camera, V3};
 use crate::tiles::USER_AGENT;
 use crate::transit_data::{self, SystemData, SYSTEMS};
 
-const OVERPASS_URL: &str = "https://overpass-api.de/api/interpreter";
 const CACHE_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 3600);
 
 #[derive(Clone, PartialEq)]
@@ -128,20 +127,64 @@ fn load(i: usize, dir: &PathBuf) -> Result<SystemData, String> {
     }
 }
 
+/// Public Overpass servers, tried in order. Any of them failing just moves on to the next.
+const ENDPOINTS: [&str; 3] = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+];
+
+/// Only one Overpass request at a time, so switching on several systems is polite to the servers.
+static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
+fn snippet(text: &str) -> String {
+    let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    flat.chars().take(160).collect()
+}
+
+fn post(agent: &ureq::Agent, url: &str, body: &str) -> Result<String, String> {
+    let mut resp = agent
+        .post(url)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .header("Accept", "application/json")
+        .send(body)
+        .map_err(|e| format!("network error: {e}"))?;
+    let status = resp.status().as_u16();
+    let text = resp
+        .body_mut()
+        .with_config()
+        .limit(200 * 1024 * 1024)
+        .read_to_string()
+        .map_err(|e| format!("could not read the answer: {e}"))?;
+    if status != 200 {
+        return Err(format!("HTTP {status} {}", snippet(&text)));
+    }
+    if !text.contains("\"elements\"") {
+        return Err(format!("unexpected answer: {}", snippet(&text)));
+    }
+    Ok(text)
+}
+
 fn fetch(query: &str) -> Result<String, String> {
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(150)))
         .user_agent(USER_AGENT)
         .http_status_as_error(false)
         .build()
         .into();
-    let url = format!("{OVERPASS_URL}?data={}", transit_data::url_encode(query));
-    let mut resp = agent.get(&url).call().map_err(|e| format!("network error: {e}"))?;
-    let status = resp.status().as_u16();
-    if status != 200 {
-        return Err(format!("Overpass answered HTTP {status}; try again in a minute"));
+    let body = format!("data={}", transit_data::url_encode(query));
+    let mut errors = Vec::new();
+    for url in ENDPOINTS {
+        match post(&agent, url, &body) {
+            Ok(t) => return Ok(t),
+            Err(e) => {
+                let host = url.trim_start_matches("https://").split('/').next().unwrap_or(url);
+                errors.push(format!("{host}: {e}"));
+            }
+        }
     }
-    resp.body_mut().with_config().limit(200 * 1024 * 1024).read_to_string().map_err(|e| e.to_string())
+    Err(errors.join(" | "))
 }
 
 // ---------------------------------------------------------------------------
