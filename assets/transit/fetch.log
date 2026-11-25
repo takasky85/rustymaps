@@ -1,118 +1,357 @@
-muni: attempt 1
-muni: overpass-api.de: HTTP 502 # 502 Gateway Timeout This Overpass API server is currently at capacity. All query workers are busy and the request queue is full. ## What to do Retry your requ | overpass.private.coffee: network error: timeout: global | overpass.kumi.systems: network error: timeout: global
-muni: attempt 2
-muni: ok, 9 lines, 246 stations, 6559 points, 0 MB downloaded
-    Muni Metro N inbound         badge N   #0072bc  1 paths
-    Muni Metro T southbound      badge T   #e31c23  2 paths
-    Muni Metro K inbound         badge K   #5bb5c9  2 paths
-    Muni Metro M inbound         badge M   #00a94f  1 paths
-    Muni Powell/Hyde Cable Car outbound badge F   #a0522d  4 paths
-    Muni Metro L inbound         badge L   #92278f  1 paths
-    Muni California Cable Car outbound badge C   #913108  3 paths
-    Muni Metro J inbound         badge J   #f7941d  2 paths
-    Muni Metro S inbound         badge S   #ffc20e  2 paths
-muni: saved 62 KB
-lametro: attempt 1
-lametro: ok, 6 lines, 111 stations, 7661 points, 0 MB downloaded
-    A                            badge A   #0072bc  2 paths
-    E                            badge E   #fdb913  2 paths
-    C                            badge C   #58a738  2 paths
-    B                            badge B   #e3131b  2 paths
-    D                            badge D   #a05da5  2 paths
-    K                            badge K   #e56db1  2 paths
-lametro: saved 64 KB
-tokyometro: attempt 1
-tokyometro: ok, 15 lines, 279 stations, 21436 points, 2 MB downloaded
-    Tokyo Metro Yūrakuchō Line (Wakoshi --> Shin-kiba) badge Y   #c1a470  4 paths
-    Tokyo Metro Hibiya Line (Naka-meguro --> Kita-Senju) badge H   #b5b5ac  2 paths
-    Tokyo Metro Hanzōmon Line (Shibuya --> Oshiage) badge Z   #8f76d6  5 paths
-    Tokyo Metro Ginza Line (Asakusa --> Shibuya) badge G   #ff9500  2 paths
-    Marunouchi Line (Ogikubo --> Ikebukuro) badge M   #f62e36  4 paths
-    C                            badge C   #00bb85  6 paths
-    Tokyo Metro Tōzai Line Local badge T   #009bbf  6 paths
-    Tokyo Metro Fukutoshin Line (Wakoshi --> Shibuya) badge F   #9c5e31  4 paths
-    Tokyo Metro Namboku Line (Meguro --> Akabane-iwabuchi) badge N   #00ac9b  2 paths
+muni: already saved, skipping
+lametro: already saved, skipping
+tokyometro: already saved, skipping
+toei: attempt 1
+toei: overpass-api.de: HTTP 502 # 502 Gateway Timeout This Overpass API server is currently at capacity. All query workers are busy and the request queue is full. ## What to do Retry your requ | overpass.private.coffee: network error: timeout: global | overpass.kumi.systems: network error: timeout: global
+toei: attempt 2
+toei: overpass-api.de: HTTP 502 # 502 Gateway Timeout This Overpass API server is currently at capacity. All query workers are busy and the request queue is full. ## What to do Retry your requ | overpass.private.coffee: HTTP 504 <?xml version="1.0" encoding="UTF-8"?> <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"> <html xmlns | overpass.kumi.systems: network error: timeout: global
+toei: attempt 3
+toei: ok, 8 lines, 129 stations, 8633 points, 0 MB downloaded
+    Shinjuku Line (Motoyawata --> Shinjuku) badge S   #6cbb5a  4 paths
+    Toei Mita Line (Meguro --> Nishi-takashimadaira) badge I   #0079c2  2 paths
+    Al                           badge AL  #f7a28d  2 paths
+    Toei Asakusa Line (Nishi-magome --> Oshiage) badge A   #e85298  2 paths
+    KS-AE                        badge     #fac814  1 paths
+    E                            badge E   #b6007a  2 paths
     Tokyo subway - Meguro Bypass Line (Hiyoshi -> Meguro) badge MG  #8ba2ae  2 paths
-    Tokyo Metro - Denentoshi bypass line (Shibuya -> Chuo-Rinkan) badge DT  #937cb9  6 paths
-    Tokyo Metro - Tōjō Bypass Line (eastbound) badge TJ  #01aaaa  3 paths
-    Tokyo Metro - Odawara Bypass Line (southbound) badge OH  #939598  2 paths
-    Tokyo Metro - Mukōgaoka-Yuen Bypass Line (westbound) badge OT  #00a650  1 paths
-    TJ                           badge TJ  #004098  1 paths
-tokyometro: saved 178 KB
-london: attempt 1
-london: overpass-api.de: HTTP 502 # 502 Gateway Timeout This Overpass API server is currently at capacity. All query workers are busy and the request queue is full. ## What to do Retry your requ | overpass.private.coffee: HTTP 504 <?xml version="1.0" encoding="UTF-8"?> <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"> <html xmlns | overpass.kumi.systems: HTTP 504 <?xml version="1.0" encoding="UTF-8"?> <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"> <html xmlns
-london: attempt 2
-london: ok, 12 lines, 363 stations, 24691 points, 5 MB downloaded
-    Waterloo & City              badge     #93ceba  2 paths
-    Northern                     badge     #141414  14 paths
-    Central                      badge     #dc241f  83 paths
-    Circle                       badge     #ffc80a  4 paths
-    District                     badge     #007d32  14 paths
-    Bakerloo                     badge     #b26300  2 paths
-    Jubilee                      badge     #868f98  4 paths
-    Metropolitan                 badge     #9b0058  8 paths
-    Hammersmith & City           badge     #f4a9be  2 paths
-    Piccadilly                   badge     #0019a8  5 paths
-    Victoria                     badge     #0098d8  2 paths
-    S-L                          badge     #00afad  16 paths
-london: saved 208 KB
-newyork: attempt 1
-newyork: overpass-api.de: HTTP 502 # 502 Gateway Timeout This Overpass API server is currently at capacity. All query workers are busy and the request queue is full. ## What to do Retry your requ | overpass.private.coffee: network error: timeout: global | overpass.kumi.systems: network error: timeout: global
-newyork: attempt 2
-newyork: overpass-api.de: HTTP 502 # 502 Gateway Timeout This Overpass API server is currently at capacity. All query workers are busy and the request queue is full. ## What to do Retry your requ | overpass.private.coffee: HTTP 504 <?xml version="1.0" encoding="UTF-8"?> <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"> <html xmlns | overpass.kumi.systems: network error: timeout: global
-newyork: attempt 3
-newyork: ok, 32 lines, 482 stations, 29334 points, 6 MB downloaded
-    1                            badge 1   #ee352e  2 paths
-    L                            badge L   #a7a9ac  2 paths
-    M                            badge M   #ff6319  6 paths
-    B                            badge B   #ff6319  4 paths
-    D                            badge D   #ff6319  7 paths
-    F                            badge F   #ff6319  4 paths
-    Z                            badge Z   #996633  3 paths
-    C                            badge C   #0039a6  2 paths
-    E                            badge E   #0039a6  6 paths
-    5                            badge 5   #00933c  7 paths
-    J                            badge J   #996633  6 paths
-    2                            badge 2   #ee352e  4 paths
-    3                            badge 3   #ee352e  2 paths
-    4                            badge 4   #00933c  9 paths
-    S                            badge S   #808183  6 paths
-    SIR                          badge     #08179c  5 paths
-    HOB–33                       badge     #0082c6  2 paths
-    JSQ–33                       badge     #fdb827  2 paths
-    HOB–WTC                      badge     #009e58  1 paths
-    NWK–WTC                      badge     #ef3941  1 paths
-    G                            badge G   #6cbe45  2 paths
-    6                            badge 6   #00933c  2 paths
-    7                            badge 7   #b933ad  2 paths
-    W                            badge W   #fccc0a  2 paths
-    N                            badge N   #fccc0a  6 paths
-    A                            badge A   #0039a6  10 paths
-    R                            badge R   #fccc0a  4 paths
-    Q                            badge Q   #fccc0a  4 paths
-    <6>                          badge     #009952  3 paths
-    <7>                          badge     #9a38a1  2 paths
-    JSQ–33 via HOB               badge     #1eb9dc  6 paths
-    <F>                          badge     #eb6800  2 paths
-newyork: saved 250 KB
-paris: attempt 1
-paris: ok, 17 lines, 332 stations, 8218 points, 1 MB downloaded
-    8                            badge 8   #e19bdf  4 paths
-    7                            badge 7   #fa9aba  5 paths
-    5                            badge 5   #ff7e2e  3 paths
-    14                           badge 14  #62259d  2 paths
-    4                            badge 4   #cf009e  2 paths
-    10                           badge 10  #c9910d  3 paths
-    12                           badge 12  #007852  4 paths
-    9                            badge 9   #b6bd00  3 paths
-    1                            badge 1   #ffcd00  2 paths
-    3                            badge 3   #837902  4 paths
-    11                           badge 11  #704b1c  2 paths
-    13                           badge 13  #6ec4e8  4 paths
-    3bis                         badge     #6ec4e8  2 paths
-    6                            badge 6   #6eca97  1 paths
-    2                            badge 2   #003ca6  1 paths
-    Orlyval                      badge     #ffcf00  4 paths
-    7bis                         badge     #6eca97  1 paths
-paris: saved 74 KB
+    KS-AE                        badge     #ff7300  4 paths
+toei: saved 72 KB
+london: already saved, skipping
+newyork: already saved, skipping
+paris: already saved, skipping
+moscow: attempt 1
+moscow: ok, 15 lines, 281 stations, 9646 points, 1 MB downloaded
+    Circle line (Inner)          badge 5   #a35539  2 paths
+    Kaluzhsko-Rizhskaya line     badge 6   #f07e23  2 paths
+    9                            badge 9   #adacac  2 paths
+    4А                           badge 4А  #1ebcef  4 paths
+    3                            badge 3   #0072ba  2 paths
+    1                            badge 1   #e42313  2 paths
+    7                            badge 7   #943e90  2 paths
+    10                           badge 10  #bed12c  2 paths
+    Kalininskaya line            badge 8   #ffcd1c  4 paths
+    12                           badge 12  #bac8e8  2 paths
+    2                            badge 2   #4fb04f  2 paths
+    15                           badge 15  #f088b6  2 paths
+    11                           badge 11  #78c7c9  2 paths
+    16                           badge 16  #007763  2 paths
+    17                           badge 17  #474a51  2 paths
+moscow: saved 81 KB
+beijing: attempt 1
+beijing: ok, 28 lines, 413 stations, 14228 points, 1 MB downloaded
+    15                           badge 15  #653279  2 paths
+    Subway Daxing Line           badge 4S  #007e84  2 paths
+    1                            badge 1   #a12830  2 paths
+    Subway 2                     badge 2   #00529b  2 paths
+    1E                           badge 1E  #dc731e  2 paths
+    13                           badge 13  #f9e700  2 paths
+    5                            badge 5   #ae005f  2 paths
+    8                            badge 8   #00997a  2 paths
+    10                           badge 10  #178abb  2 paths
+    25N                          badge     #d85f26  2 paths
+    L1                           badge L1  #9b91b1  3 paths
+    9                            badge 9   #87d300  2 paths
+    4                            badge 4   #008994  4 paths
+    27                           badge 27  #d47daa  2 paths
+    24;L2                        badge     #d61572  2 paths
+    14                           badge 14  #d4a7a1  2 paths
+    7                            badge 7   #ffc66e  2 paths
+    6                            badge 6   #bb8900  2 paths
+    16                           badge 16  #6da843  2 paths
+    25S                          badge     #6d1edc  2 paths
+                                 badge     #1edc96  1 paths
+    Daxing Airport Express (Southbound) badge     #3f48cc  1 paths
+    11                           badge 11  #ed796a  2 paths
+    17                           badge 17  #00a9a9  2 paths
+    19                           badge 19  #d6aac1  2 paths
+    3                            badge 3   #d90627  2 paths
+                                 badge     #9b5a1a  2 paths
+    18                           badge 18  #5554a2  2 paths
+beijing: saved 124 KB
+shanghai: attempt 1
+shanghai: ok, 18 lines, 420 stations, 15397 points, 1 MB downloaded
+    Line 8                       badge 8   #009fdf  2 paths
+    Line 3                       badge 3   #ffd100  2 paths
+    Line 4                       badge 4   #5f259f  2 paths
+    Line 10                      badge 10  #c1a7e2  4 paths
+    Line 1                       badge 1   #e4002b  2 paths
+    Line 9                       badge 9   #71c5e8  2 paths
+    Line 13                      badge 13  #ef95cf  2 paths
+    Line 6                       badge 6   #d9017a  2 paths
+    Line 5                       badge 5   #ac4fc6  4 paths
+    Line 16                      badge 16  #2cd5c4  4 paths
+    12                           badge 12  #007b5f  2 paths
+    Line 11                      badge 11  #76232f  4 paths
+    2                            badge 2   #97d700  2 paths
+    Line 17                      badge 17  #c09c83  2 paths
+    Line 7                       badge 7   #ff6900  2 paths
+    Line 18                      badge 18  #d6a461  2 paths
+    14                           badge 14  #827a04  2 paths
+    Line 15                      badge 15  #bba786  2 paths
+shanghai: saved 134 KB
+guangzhou: attempt 1
+guangzhou: ok, 20 lines, 353 stations, 38707 points, 4 MB downloaded
+    3                            badge 3   #eca154  6 paths
+    GF                           badge GF  #c4d600  2 paths
+    Metro Line 4                 badge 4   #00843d  2 paths
+    Subway Line 14               badge 14  #81312f  8 paths
+    13                           badge 13  #8e8c13  2 paths
+    6                            badge 6   #80225f  2 paths
+    Subway Line 2                badge 2   #00629b  2 paths
+    8                            badge 8   #008c95  2 paths
+    Subway Line 1                badge 1   #f3d03e  2 paths
+    5                            badge 5   #c5003e  2 paths
+    7                            badge 7   #97d700  2 paths
+    21                           badge 21  #201747  6 paths
+    Subway Line 18 Express       badge 18  #0047ba  8 paths
+    F2                           badge F2  #c10230  2 paths
+    22                           badge 22  #cd5228  2 paths
+    F3                           badge F3  #002f87  2 paths
+    Metro Line 11                badge 11  #fac525  2 paths
+    22                           badge 22  #d8dc1e  2 paths
+    10                           badge 10  #7389b2  2 paths
+    12                           badge 12  #435428  4 paths
+guangzhou: saved 318 KB
+shenzhen: attempt 1
+shenzhen: overpass-api.de: HTTP 502 # 502 Gateway Timeout This Overpass API server is currently at capacity. All query workers are busy and the request queue is full. ## What to do Retry your requ | overpass.private.coffee: network error: timeout: global | overpass.kumi.systems: network error: timeout: global
+shenzhen: attempt 2
+shenzhen: ok, 17 lines, 393 stations, 18233 points, 2 MB downloaded
+    1                            badge 1   #00ab39  2 paths
+    3                            badge 3   #00a2e1  2 paths
+    4                            badge 4   #dc241f  2 paths
+    2                            badge 2   #db6d1c  2 paths
+    5                            badge 5   #9950b2  2 paths
+    MTR East Rail Line           badge     #53b7e8  8 paths
+    MTR Tuen Ma Line             badge     #923011  4 paths
+    11                           badge 11  #6a1d44  2 paths
+    7                            badge 7   #0035ad  2 paths
+    9                            badge 9   #846e74  2 paths
+    6                            badge 6   #3abca8  2 paths
+    10                           badge 10  #f8779e  2 paths
+    Subway Line 14               badge 14  #f2c75c  2 paths
+    12                           badge 12  #a192b2  2 paths
+    Subway Line 6 Branch         badge 6B  #428d89  2 paths
+    16                           badge 16  #1e22aa  2 paths
+    13                           badge 13  #de7c00  2 paths
+shenzhen: saved 154 KB
+chengdu: attempt 1
+chengdu: ok, 18 lines, 364 stations, 10322 points, 1 MB downloaded
+    Chengdu Metro Line 1         badge 1   #10069f  4 paths
+    2                            badge 2   #ff5c39  2 paths
+    Chengdu Metro Line 4         badge 4   #44af52  2 paths
+    Chengdu Metro Line 3         badge 3   #d40f7d  2 paths
+    Chengdu Metro Line 7         badge 7   #6ad1e3  2 paths
+    10                           badge 10  #003da5  2 paths
+    9                            badge 9   #ffb81c  2 paths
+    Chengdu Metro Line 6         badge 6   #b36924  2 paths
+    Chengdu Metro Line 5         badge 5   #bb29bb  2 paths
+    8                            badge 8   #88dd00  2 paths
+    17                           badge 17  #80e0a7  2 paths
+    Chengdu Metro Line 18        badge 18  #006272  6 paths
+    13                           badge 13  #c5a900  2 paths
+    Chengdu Metro Line 27        badge 27  #00a3e0  2 paths
+    19                           badge 19  #5c88db  10 paths
+                                 badge     #dc1e66  1 paths
+                                 badge     #dc701e  1 paths
+    30                           badge 30  #f63676  2 paths
+chengdu: saved 92 KB
+wuhan: attempt 1
+wuhan: ok, 13 lines, 299 stations, 10969 points, 0 MB downloaded
+    Wuhan Metro Line 1 (Southbound) badge 1   #0067a1  2 paths
+    2                            badge 2   #ec9cbb  2 paths
+    Wuhan Metro Line 4           badge 4   #a6d30b  2 paths
+    Wuhan Metro Line 3           badge 3   #d3b466  2 paths
+    Wuhan Metro Line 8           badge 8   #9dabaa  2 paths
+    Wuhan Metro Line 6           badge 6   #007128  2 paths
+    7                            badge 7   #eb7c16  2 paths
+    Wuhan Metro Line 11          badge 11  #f6d300  2 paths
+    21                           badge 21  #b2007b  2 paths
+    5                            badge 5   #a43034  2 paths
+    16                           badge 16  #c24c6d  2 paths
+    19                           badge 19  #5ac1a7  2 paths
+    12                           badge 12  #00a3e9  2 paths
+wuhan: saved 95 KB
+nanjing: attempt 1
+nanjing: overpass-api.de: HTTP 502 # 502 Gateway Timeout This Overpass API server is currently at capacity. All query workers are busy and the request queue is full. ## What to do Retry your requ | overpass.private.coffee: network error: timeout: global | overpass.kumi.systems: network error: timeout: global
+nanjing: attempt 2
+nanjing: overpass-api.de: HTTP 502 # 502 Gateway Timeout This Overpass API server is currently at capacity. All query workers are busy and the request queue is full. ## What to do Retry your requ | overpass.private.coffee: network error: timeout: global | overpass.kumi.systems: network error: timeout: global
+nanjing: attempt 3
+nanjing: ok, 15 lines, 276 stations, 9390 points, 0 MB downloaded
+    10                           badge 10  #eac384  2 paths
+    2                            badge 2   #c7003f  2 paths
+    1                            badge 1   #00a2df  2 paths
+    3                            badge 3   #009651  2 paths
+    S1                           badge S1  #4bbbb4  2 paths
+    S8                           badge S8  #eca153  2 paths
+    S3                           badge S3  #ba84ac  2 paths
+    4                            badge 4   #a513c0  2 paths
+    S6                           badge S6  #b58bd7  2 paths
+    7                            badge 7   #4a7729  2 paths
+                                 badge     #ff631b  1 paths
+                                 badge     #1edc73  1 paths
+    5                            badge 5   #f2da51  2 paths
+    S1-S7 Exp                    badge     #74a7ac  2 paths
+    S2                           badge S2  #92282b  2 paths
+nanjing: saved 80 KB
+hangzhou: attempt 1
+hangzhou: ok, 13 lines, 303 stations, 16611 points, 1 MB downloaded
+    Line 1                       badge 1   #df4661  2 paths
+    2                            badge 2   #ff7300  2 paths
+    4                            badge 4   #6bc349  2 paths
+    5                            badge 5   #0db0c8  2 paths
+    7                            badge 7   #88129e  2 paths
+    1                            badge 1   #c5003e  2 paths
+    8                            badge 8   #ac145a  2 paths
+    9                            badge 9   #be4d00  2 paths
+    6                            badge 6   #0072ce  4 paths
+    杭海城际                         badge     #0077c8  6 paths
+    10                           badge 10  #daa520  2 paths
+    3                            badge 3   #ffd700  4 paths
+    19                           badge 19  #05c3de  2 paths
+hangzhou: saved 139 KB
+osaka: attempt 1
+osaka: overpass-api.de: HTTP 502 # 502 Gateway Timeout This Overpass API server is currently at capacity. All query workers are busy and the request queue is full. ## What to do Retry your requ | overpass.private.coffee: network error: timeout: global | overpass.kumi.systems: network error: timeout: global
+osaka: attempt 2
+osaka: overpass-api.de: HTTP 502 # 502 Gateway Timeout This Overpass API server is currently at capacity. All query workers are busy and the request queue is full. ## What to do Retry your requ | overpass.private.coffee: network error: timeout: global | overpass.kumi.systems: network error: timeout: global
+osaka: attempt 3
+osaka: ok, 9 lines, 116 stations, 3939 points, 0 MB downloaded
+    Nagahori Tsurumi-Ryokuchi (Taisho --> Kadoma-Minami) badge N   #a9cc51  2 paths
+    Osaka Municipal Subway Chūō Line (Yumeshima => Nagata) badge C   #019a66  2 paths
+    Osaka Metro Imazatosuji Line badge I   #ee7b1a  2 paths
+    Osaka Metro Sennichimae Line (Nodahanshin => Minami-Tatsumi) badge S   #e44d93  2 paths
+    Osaka Municipal Subway Yotsubashi Line (Suminoekoen --> Nishi-Umeda) badge Y   #0078be  2 paths
+    Osaka Municipal Subway Sakaisuji Line (Tenjinbashisuji 6-chome --> Tengachaya) badge K   #814721  2 paths
+    Osaka Metro Tanimachi Line (Yao-Minami --> Dainichi) badge T   #522886  2 paths
+    Kintetsu Keihanna Line Local (Nagata => Gakken-Nara-Tomigaoka) badge C   #65c03a  2 paths
+    M                            badge M   #e5171f  2 paths
+osaka: saved 34 KB
+seoul: attempt 1
+seoul: ok, 12 lines, 528 stations, 17087 points, 7 MB downloaded
+    3                            badge 3   #ed6c00  2 paths
+    Seoul Subway Line 2          badge 2   #00a23f  6 paths
+    4                            badge 4   #009bce  6 paths
+    9                            badge 9   #a49d87  12 paths
+    8                            badge 8   #d11d70  2 paths
+    6                            badge 6   #7c4932  1 paths
+    5                            badge 5   #794698  5 paths
+    1                            badge 1   #004a85  45 paths
+    신분당                          badge     #b81b30  2 paths
+    경강                           badge 경강  #0b318f  2 paths
+    7                            badge 7   #6e7e31  4 paths
+    인천1                          badge     #b4c7e7  2 paths
+seoul: saved 147 KB
+delhi: attempt 1
+delhi: ok, 12 lines, 302 stations, 8531 points, 0 MB downloaded
+    3                            badge 3   #4169e1  4 paths
+    2                            badge 2   #ffdf00  2 paths
+    1                            badge 1   #ff4040  2 paths
+    Green Line (Kirti Nagar => Ashok Park Main) badge 5   #008000  5 paths
+    6                            badge 6   #553592  2 paths
+    AEx                          badge     #ff8c00  2 paths
+    9                            badge 9   #838996  2 paths
+    RMGL                         badge     #969696  1 paths
+    7                            badge 7   #fc8eac  3 paths
+    8                            badge 8   #cc338b  4 paths
+    Aqua Line                    badge     #dc1e40  2 paths
+    Delhi–Meerut RapidX          badge     #f0631e  5 paths
+delhi: saved 76 KB
+hongkong: attempt 1
+hongkong: ok, 10 lines, 99 stations, 9294 points, 2 MB downloaded
+    MTR Tsuen Wan Line (Southbound) badge     #ed1d24  2 paths
+    MTR Tseung Kwan O Line       badge     #7d499d  4 paths
+    MTR Kwun Tong Line           badge     #00ab4e  2 paths
+    MTR East Rail Line           badge     #53b7e8  14 paths
+    MTR Island Line              badge     #007dc5  2 paths
+    MTR Disneyland Resort Line (Southbound) badge     #f173ac  2 paths
+    Airport Express              badge     #00888a  2 paths
+    Tung Chung Line              badge     #f7943e  3 paths
+    MTR Tuen Ma Line             badge     #923011  4 paths
+    SIL                          badge     #b6bd00  2 paths
+hongkong: saved 77 KB
+singapore: attempt 1
+singapore: overpass-api.de: HTTP 502 # 502 Gateway Timeout This Overpass API server is currently at capacity. All query workers are busy and the request queue is full. ## What to do Retry your requ | overpass.private.coffee: network error: timeout: global | overpass.kumi.systems: HTTP 504 <?xml version="1.0" encoding="UTF-8"?> <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"> <html xmlns
+singapore: attempt 2
+singapore: overpass-api.de: HTTP 504 <?xml version="1.0" encoding="UTF-8"?> <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"> <html xmlns | overpass.private.coffee: HTTP 504 <?xml version="1.0" encoding="UTF-8"?> <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"> <html xmlns | overpass.kumi.systems: network error: timeout: global
+singapore: attempt 3
+singapore: overpass-api.de: HTTP 502 # 502 Gateway Timeout This Overpass API server is currently at capacity. All query workers are busy and the request queue is full. ## What to do Retry your requ | overpass.private.coffee: network error: timeout: global | overpass.kumi.systems: network error: timeout: global
+singapore: attempt 4
+singapore: overpass-api.de: HTTP 502 # 502 Gateway Timeout This Overpass API server is currently at capacity. All query workers are busy and the request queue is full. ## What to do Retry your requ | overpass.private.coffee: HTTP 504 <?xml version="1.0" encoding="UTF-8"?> <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"> <html xmlns | overpass.kumi.systems: HTTP 504 <?xml version="1.0" encoding="UTF-8"?> <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"> <html xmlns
+singapore: attempt 5
+singapore: ok, 8 lines, 184 stations, 9224 points, 0 MB downloaded
+    EWL                          badge     #009645  4 paths
+    NSL                          badge     #dc241f  2 paths
+    SKLRT                        badge     #748477  2 paths
+    CCL                          badge     #fa9e0d  2 paths
+    NEL                          badge     #9016b2  2 paths
+    DTL                          badge     #0354a6  2 paths
+    TEL                          badge     #9d5b25  2 paths
+    JRL                          badge     #1edc27  5 paths
+singapore: saved 78 KB
+mexicocity: attempt 1
+mexicocity: overpass-api.de: HTTP 502 # 502 Gateway Timeout This Overpass API server is currently at capacity. All query workers are busy and the request queue is full. ## What to do Retry your requ | overpass.private.coffee: HTTP 504 <?xml version="1.0" encoding="UTF-8"?> <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"> <html xmlns | overpass.kumi.systems: HTTP 504 <?xml version="1.0" encoding="UTF-8"?> <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"> <html xmlns
+mexicocity: attempt 2
+mexicocity: ok, 12 lines, 173 stations, 3701 points, 0 MB downloaded
+    2                            badge 2   #005eb8  1 paths
+    8                            badge 8   #009a44  2 paths
+    4                            badge 4   #6bbbae  2 paths
+    B                            badge B   #b1b3b3  2 paths
+    5                            badge 5   #ffd100  2 paths
+    3                            badge 3   #af9800  1 paths
+    6                            badge 6   #da291c  2 paths
+    9                            badge 9   #512f2e  2 paths
+    A                            badge A   #981d97  2 paths
+    1                            badge 1   #f04e98  2 paths
+    12                           badge 12  #b0a32a  3 paths
+    7                            badge 7   #e87722  2 paths
+mexicocity: saved 34 KB
+madrid: attempt 1
+madrid: ok, 16 lines, 276 stations, 10437 points, 1 MB downloaded
+    Línea 11                     badge     #006400  2 paths
+    Línea 6                      badge L6  #939393  2 paths
+    Línea 3                      badge L3  #ffdf00  2 paths
+    Línea 10                     badge     #015396  5 paths
+    L2                           badge L2  #fb0f0c  2 paths
+    Línea 5                      badge L5  #96bf0d  2 paths
+    Línea Ramal                  badge R   #a3dc1e  2 paths
+    Línea ML-3                   badge     #ff0000  2 paths
+    Línea ML-2                   badge     #660066  2 paths
+    Línea 1                      badge L1  #67c0dd  2 paths
+    Línea 7                      badge L7  #ed7b24  2 paths
+    Línea 8                      badge L8  #eba6c9  2 paths
+    Línea 9                      badge L9  #9c3293  2 paths
+    Línea ML-1                   badge     #4682b4  2 paths
+    Línea 12. Metrosur (Dirección Loranca - Andén 2) badge     #a49a00  2 paths
+    Línea 4                      badge L4  #824100  2 paths
+madrid: saved 90 KB
+berlin: attempt 1
+berlin: ok, 9 lines, 170 stations, 7284 points, 0 MB downloaded
+    U5                           badge U5  #7e5330  2 paths
+    U2                           badge U2  #da421e  2 paths
+    U1                           badge U1  #7dad4c  2 paths
+    U3                           badge U3  #16683d  2 paths
+    U4                           badge U4  #f0d722  2 paths
+    U7                           badge U7  #528dba  2 paths
+    U8                           badge U8  #224f86  2 paths
+    U9                           badge U9  #f3791d  2 paths
+    U6                           badge U6  #8c6dab  2 paths
+berlin: saved 63 KB
+cairo: attempt 1
+cairo: ok, 3 lines, 86 stations, 1676 points, 0 MB downloaded
+    1                            badge 1   #dc2a1e  2 paths
+    2                            badge 2   #ff7000  2 paths
+    3                            badge 3   #00af23  4 paths
+cairo: saved 15 KB
+saopaulo: attempt 1
+saopaulo: overpass-api.de: HTTP 502 # 502 Gateway Timeout This Overpass API server is currently at capacity. All query workers are busy and the request queue is full. ## What to do Retry your requ | overpass.private.coffee: network error: timeout: global | overpass.kumi.systems: network error: timeout: global
+saopaulo: attempt 2
+saopaulo: ok, 8 lines, 83 stations, 2519 points, 0 MB downloaded
+    5                            badge 5   #9200c3  2 paths
+    3                            badge 3   #ef3f32  1 paths
+    2                            badge 2   #008162  2 paths
+    4                            badge 4   #ffd700  1 paths
+    1                            badge 1   #1266af  2 paths
+    3                            badge 3   #d9001c  1 paths
+    4                            badge 4   #ffd500  1 paths
+    6                            badge 6   #f96815  2 paths
+saopaulo: saved 22 KB
 finished, 0 system(s) missing
