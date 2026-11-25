@@ -76,6 +76,7 @@ impl App {
         s.set("exaggeration", self.exaggeration);
         s.set("plane_quality", self.plane_quality);
         s.set("anim_fps", self.anim_fps);
+        s.set("ui_size", self.ui_size);
         for p in &self.planes {
             s.set(&format!("plane_{}", p.def.model), p.show);
         }
@@ -124,6 +125,9 @@ impl App {
         if let Some(v) = s.get::<usize>("speed") {
             self.speed = v.min(SPEEDS.len() - 1);
         }
+        if let Some(v) = s.get::<usize>("ui_size") {
+            self.ui_size = v.min(crate::ui::UI_SIZES.len() - 1);
+        }
         if let Some(v) = s.get::<u32>("anim_fps") {
             self.anim_fps = v.clamp(10, 120);
         }
@@ -147,6 +151,7 @@ impl App {
                 }
             }
         }
+        crate::ui::apply_scale(ctx, crate::ui::UI_SIZES[self.ui_size].1);
         if let Some(name) = s.get::<String>("font") {
             if let Some(i) = self.fonts.names().iter().position(|n| *n == name) {
                 self.fonts.selected = i;

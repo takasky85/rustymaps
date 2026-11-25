@@ -21,6 +21,27 @@ pub enum Tab {
     View,
 }
 
+/// Interface text sizes: (name, multiplier).
+pub const UI_SIZES: [(&str, f32); 3] = [("Normal", 1.0), ("Large", 1.25), ("X-large", 1.5)];
+
+/// Sets the interface's text sizes and spacing for the chosen size multiplier.
+pub fn apply_scale(ctx: &egui::Context, k: f32) {
+    use egui::{FontId, TextStyle};
+    ctx.style_mut(|st| {
+        st.text_styles.insert(TextStyle::Body, FontId::proportional(15.0 * k));
+        st.text_styles.insert(TextStyle::Button, FontId::proportional(15.0 * k));
+        st.text_styles.insert(TextStyle::Heading, FontId::proportional(20.0 * k));
+        st.text_styles.insert(TextStyle::Small, FontId::proportional(13.0 * k));
+        st.text_styles.insert(TextStyle::Monospace, FontId::monospace(14.0 * k));
+        st.spacing.item_spacing = egui::vec2(8.0 * k, 6.0 * k);
+        st.spacing.button_padding = egui::vec2(8.0 * k, 4.0 * k);
+        st.spacing.interact_size.y = 24.0 * k;
+        st.spacing.slider_width = 200.0 * k;
+        st.spacing.icon_width = 16.0 * k;
+        st.spacing.icon_width_inner = 9.0 * k;
+    });
+}
+
 const TABS: [(Tab, &str); 5] =
     [(Tab::Places, "Places"), (Tab::Map, "Map"), (Tab::Transit, "Transit"), (Tab::Flights, "Flights"), (Tab::View, "View")];
 
@@ -42,8 +63,23 @@ fn shorten(s: &str, n: usize) -> String {
 }
 
 impl App {
+    fn k(&self) -> f32 {
+        UI_SIZES[self.ui_size.min(UI_SIZES.len() - 1)].1
+    }
+
+    /// Inner width of the tab panels.
+    fn panel_w(&self) -> f32 {
+        430.0 * self.k()
+    }
+
+    /// Width of one cell when `cols` equal cells share a panel row.
+    fn cell_w(&self, cols: usize) -> f32 {
+        (self.panel_w() - (cols as f32 - 1.0) * 8.0 * self.k()) / cols as f32
+    }
+
     pub(crate) fn controls(&mut self, ctx: &egui::Context, rect: egui::Rect, now: f64, zf: f64) {
-        let avail_h = (rect.height() - 130.0).max(220.0);
+        let k = self.k();
+        let avail_h = (rect.height() - 80.0 * k).max(240.0);
 
         // ---- the bar ----
         egui::Area::new(egui::Id::new("bar")).anchor(egui::Align2::LEFT_TOP, egui::vec2(8.0, 8.0)).order(egui::Order::Foreground).show(ctx, |ui| {
@@ -57,7 +93,7 @@ impl App {
                         }
                     }
                     ui.separator();
-                    let resp = ui.add(egui::TextEdit::singleline(&mut self.search_text).hint_text("Search a place or station…").desired_width(210.0));
+                    let resp = ui.add(egui::TextEdit::singleline(&mut self.search_text).hint_text("Search a place or station…").desired_width(220.0 * k));
                     let go = ui.button("Search").clicked();
                     if (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) || go {
                         self.run_search(ctx);
@@ -72,13 +108,13 @@ impl App {
         });
 
         // ---- the panel under it ----
-        let pos = egui::vec2(8.0, 56.0);
+        let pos = egui::vec2(8.0, 14.0 + 34.0 * k);
         if self.search_open {
             self.search_panel(ctx, pos, now);
         } else if let Some(tab) = self.tab {
             egui::Area::new(egui::Id::new("panel")).anchor(egui::Align2::LEFT_TOP, pos).order(egui::Order::Foreground).show(ctx, |ui| {
                 frame(ctx).show(ui, |ui| {
-                    ui.set_width(340.0);
+                    ui.set_width(self.panel_w());
                     egui::ScrollArea::vertical().max_height(avail_h).auto_shrink([true, true]).show(ui, |ui| match tab {
                         Tab::Places => self.tab_places(ui, now),
                         Tab::Map => self.tab_map(ctx, ui),
@@ -109,12 +145,13 @@ impl App {
         });
         ui.separator();
         ui.label(RichText::new("Cities with a subway map").strong());
-        egui::Grid::new("places").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
+        let (cw, ch) = (self.cell_w(3), 28.0 * self.k());
+        egui::Grid::new("places").num_columns(3).spacing([8.0 * self.k(), 6.0 * self.k()]).show(ui, |ui| {
             for (n, sys) in SYSTEMS.iter().enumerate() {
-                if ui.add_sized([158.0, 22.0], egui::Button::new(sys.title)).clicked() {
+                if ui.add_sized([cw, ch], egui::Button::new(sys.title).truncate()).on_hover_text(sys.title).clicked() {
                     self.goto_city(sys.home.1, sys.home.0, now);
                 }
-                if n % 2 == 1 {
+                if n % 3 == 2 {
                     ui.end_row();
                 }
             }
@@ -124,13 +161,27 @@ impl App {
     // ---------------------------------------------------------------- Map
 
     fn tab_map(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label("Style");
-            egui::ComboBox::from_id_salt("palette").selected_text(self.palette.name()).width(220.0).show_ui(ui, |ui| {
-                for p in Palette::all() {
-                    ui.selectable_value(&mut self.palette, p, p.name());
+        ui.label(RichText::new("Style").strong());
+        let (cw, ch) = (self.cell_w(3), 34.0 * self.k());
+        egui::Grid::new("styles").num_columns(3).spacing([8.0 * self.k(), 6.0 * self.k()]).show(ui, |ui| {
+            for (n, p) in Palette::all().enumerate() {
+                let r = ui.add_sized([cw, ch], egui::Button::new(p.name()).truncate().selected(self.palette == p)).on_hover_text(p.name());
+                // a strip of the style's colours along the bottom edge of the button
+                let sw = p.swatch();
+                let strip = egui::Rect::from_min_max(egui::pos2(r.rect.min.x + 3.0, r.rect.max.y - 7.0), egui::pos2(r.rect.max.x - 3.0, r.rect.max.y - 3.0));
+                let seg = strip.width() / sw.len() as f32;
+                for (i, c) in sw.iter().enumerate() {
+                    let col = Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, *c as u8);
+                    let q = egui::Rect::from_min_size(egui::pos2(strip.min.x + seg * i as f32, strip.min.y), egui::vec2(seg, strip.height()));
+                    ui.painter().rect_filled(q, 0.0, col);
                 }
-            });
+                if r.clicked() {
+                    self.palette = p;
+                }
+                if n % 3 == 2 {
+                    ui.end_row();
+                }
+            }
         });
         ui.separator();
         ui.checkbox(&mut self.show_labels, "Labels");
@@ -142,20 +193,18 @@ impl App {
                 }
             });
             ui.checkbox(&mut self.label_bold, "Bold");
-            ui.horizontal(|ui| {
-                ui.label("Font");
-                let names = self.fonts.names();
-                let before = self.fonts.selected;
-                egui::ComboBox::from_id_salt("label_font").selected_text(names[self.fonts.selected.min(names.len() - 1)]).width(170.0).show_ui(ui, |ui| {
-                    for (i, n) in names.iter().enumerate() {
-                        ui.selectable_value(&mut self.fonts.selected, i, *n);
-                    }
-                });
-                if self.fonts.selected != before {
-                    self.fonts.apply(ctx);
+            ui.label("Font");
+            let names = self.fonts.names();
+            let before = self.fonts.selected;
+            ui.horizontal_wrapped(|ui| {
+                for (i, n) in names.iter().enumerate() {
+                    ui.selectable_value(&mut self.fonts.selected, i, *n);
                 }
             });
-            ui.small("Fonts are the ones installed on this computer.");
+            if self.fonts.selected != before {
+                self.fonts.apply(ctx);
+            }
+            ui.small(if self.fonts.has_real_bold() { "Fonts installed on this computer; this one has a real bold face." } else { "Fonts installed on this computer; bold is faked for this one (pick another for real bold)." });
         });
         ui.separator();
         ui.checkbox(&mut self.show_compass, "Compass");
@@ -224,11 +273,10 @@ impl App {
 
     fn tab_flights(&mut self, ui: &mut egui::Ui, now: f64) {
         ui.horizontal(|ui| {
-            egui::ComboBox::from_id_salt("speed").selected_text(SPEEDS[self.speed].0).width(100.0).show_ui(ui, |ui| {
-                for (i, (name, _)) in SPEEDS.iter().enumerate() {
-                    ui.selectable_value(&mut self.speed, i, *name);
-                }
-            });
+            ui.label("Speed");
+            for (i, (name, _)) in SPEEDS.iter().enumerate() {
+                ui.selectable_value(&mut self.speed, i, *name);
+            }
             if ui.button("▶ all").clicked() {
                 for p in &mut self.planes {
                     p.sim.playing = true;
@@ -263,15 +311,32 @@ impl App {
             }
             ui.small(format!("Put the data folder next to the program or at {}", self.data_dir.display()));
         }
+        let slider_w = self.panel_w() - 24.0;
         let mut look: Option<usize> = None;
         for i in 0..self.planes.len() {
             ui.separator();
             let p = &mut self.planes[i];
-            ui.checkbox(&mut p.show, format!("{}   {} → {}", p.def.label, p.def.from.0, p.def.to.0));
+            let st = p.sim.state(&p.route);
+            let status = if p.sim.pause > 0.0 {
+                "turning around"
+            } else if p.sim.outbound {
+                "outbound"
+            } else {
+                "returning"
+            };
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut p.show, format!("{}   {} → {}", p.def.label, p.def.from.0, p.def.to.0));
+                if p.show {
+                    ui.label(
+                        RichText::new(format!("{:.0}%  {:.1} h  {:.0} ft  {}", p.sim.t * 100.0, p.sim.t * p.route.duration_s() / 3600.0, st.alt_m / 0.3048, status))
+                            .monospace()
+                            .weak(),
+                    );
+                }
+            });
             if !p.show {
                 continue;
             }
-            let st = p.sim.state(&p.route);
             ui.horizontal(|ui| {
                 if ui.button(if p.sim.playing { "⏸" } else { "▶" }).clicked() {
                     p.sim.playing = !p.sim.playing;
@@ -288,29 +353,11 @@ impl App {
                     self.follow = if f { Some(i) } else { None };
                 }
             });
-            ui.spacing_mut().slider_width = 280.0;
+            ui.spacing_mut().slider_width = slider_w;
             let mut tt = p.sim.t;
             if ui.add(egui::Slider::new(&mut tt, 0.0..=1.0).show_value(false)).changed() {
                 p.sim.set_t(tt);
             }
-            let status = if p.sim.pause > 0.0 {
-                "turning around"
-            } else if p.sim.outbound {
-                "outbound"
-            } else {
-                "returning"
-            };
-            ui.label(
-                RichText::new(format!(
-                    "{:.0}%  {:.1} h  {:.0} ft  {}",
-                    p.sim.t * 100.0,
-                    p.sim.t * p.route.duration_s() / 3600.0,
-                    st.alt_m / 0.3048,
-                    status
-                ))
-                .monospace()
-                .size(12.0),
-            );
         }
         if let Some(i) = look {
             self.look_at_plane(i, now);
@@ -345,13 +392,23 @@ impl App {
             }
         });
         ui.horizontal(|ui| {
+            ui.label("Text size");
+            let before = self.ui_size;
+            for (i, (name, _)) in UI_SIZES.iter().enumerate() {
+                ui.selectable_value(&mut self.ui_size, i, *name);
+            }
+            if self.ui_size != before {
+                apply_scale(ui.ctx(), self.k());
+            }
+        });
+        ui.horizontal(|ui| {
             ui.label("Animation rate");
             ui.selectable_value(&mut self.anim_fps, 30, "30 fps (light)");
             ui.selectable_value(&mut self.anim_fps, 60, "60 fps");
         });
         ui.small("The map only redraws when something changes; planes and trains pace themselves to this rate.");
         ui.separator();
-        let t = |s: String| RichText::new(s).monospace().size(12.0);
+        let t = |s: String| RichText::new(s).monospace();
         ui.label(t(format!("zoom {:.2}   tilt {:.0}°   rot {:.0}°", zf, self.cam.pitch.to_degrees(), self.cam.heading.to_degrees())));
         ui.label(t(format!("{:.4}°, {:.4}°", self.cam.lat.to_degrees(), self.cam.lon.to_degrees())));
         ui.label(t(format!(
@@ -407,7 +464,7 @@ impl App {
         let mut close = false;
         egui::Area::new(egui::Id::new("search_panel")).anchor(egui::Align2::LEFT_TOP, pos).order(egui::Order::Foreground).show(ctx, |ui| {
             frame(ctx).show(ui, |ui| {
-                ui.set_width(380.0);
+                ui.set_width(self.panel_w());
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Search results").strong());
                     if self.search.busy {

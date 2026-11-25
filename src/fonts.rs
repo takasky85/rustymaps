@@ -13,6 +13,7 @@ use eframe::egui::{self, FontData, FontDefinitions, FontFamily};
 
 /// Name of the egui font family the map labels are drawn with.
 pub const MAP_FAMILY: &str = "map-labels";
+pub const MAP_BOLD_FAMILY: &str = "map-labels-bold";
 
 /// A font we know how to find: display name, file name (compared in lower case), index inside a
 /// .ttc collection.
@@ -20,36 +21,43 @@ struct Known {
     name: &'static str,
     file: &'static str,
     index: u32,
+    /// The real bold face of the same family, when it ships as a separate file ("" = none).
+    bold: &'static str,
+    bold_index: u32,
 }
 
 const fn k(name: &'static str, file: &'static str, index: u32) -> Known {
-    Known { name, file, index }
+    Known { name, file, index, bold: "", bold_index: 0 }
+}
+
+const fn kb(name: &'static str, file: &'static str, index: u32, bold: &'static str, bold_index: u32) -> Known {
+    Known { name, file, index, bold, bold_index }
 }
 
 /// Offered in the picker when installed, in this order.
 const KNOWN: &[Known] = &[
     // Windows
-    k("Segoe UI", "segoeui.ttf", 0),
-    k("Segoe UI Semibold", "seguisb.ttf", 0),
+    kb("Segoe UI", "segoeui.ttf", 0, "segoeuib.ttf", 0),
+    kb("Segoe UI Semibold", "seguisb.ttf", 0, "segoeuib.ttf", 0),
     k("Bahnschrift", "bahnschrift.ttf", 0),
-    k("Arial", "arial.ttf", 0),
-    k("Arial Narrow", "arialn.ttf", 0),
-    k("Calibri", "calibri.ttf", 0),
-    k("Candara", "candara.ttf", 0),
-    k("Tahoma", "tahoma.ttf", 0),
-    k("Trebuchet MS", "trebuc.ttf", 0),
-    k("Verdana", "verdana.ttf", 0),
-    k("Georgia", "georgia.ttf", 0),
-    k("Yu Gothic", "yugothm.ttc", 0),
-    k("Meiryo", "meiryo.ttc", 0),
+    kb("Arial", "arial.ttf", 0, "arialbd.ttf", 0),
+    kb("Arial Narrow", "arialn.ttf", 0, "arialnb.ttf", 0),
+    kb("Calibri", "calibri.ttf", 0, "calibrib.ttf", 0),
+    kb("Candara", "candara.ttf", 0, "candarab.ttf", 0),
+    kb("Tahoma", "tahoma.ttf", 0, "tahomabd.ttf", 0),
+    kb("Trebuchet MS", "trebuc.ttf", 0, "trebucbd.ttf", 0),
+    kb("Verdana", "verdana.ttf", 0, "verdanab.ttf", 0),
+    kb("Georgia", "georgia.ttf", 0, "georgiab.ttf", 0),
+    kb("Yu Gothic", "yugothm.ttc", 0, "yugothb.ttc", 0),
+    kb("Meiryo", "meiryo.ttc", 0, "meiryob.ttc", 0),
     // macOS
     k("Helvetica Neue", "helveticaneue.ttc", 0),
-    k("Helvetica", "helvetica.ttc", 0),
+    kb("Helvetica", "helvetica.ttc", 0, "helvetica.ttc", 1),
     // Linux
-    k("Noto Sans", "notosans-regular.ttf", 0),
-    k("Ubuntu", "ubuntu-r.ttf", 0),
-    k("DejaVu Sans", "dejavusans.ttf", 0),
-    k("Liberation Sans", "liberationsans-regular.ttf", 0),
+    kb("Noto Sans", "notosans-regular.ttf", 0, "notosans-bold.ttf", 0),
+    kb("Ubuntu", "ubuntu-r.ttf", 0, "ubuntu-b.ttf", 0),
+    kb("DejaVu Sans", "dejavusans.ttf", 0, "dejavusans-bold.ttf", 0),
+    kb("Liberation Sans", "liberationsans-regular.ttf", 0, "liberationsans-bold.ttf", 0),
 ];
 
 /// What is used when the user has not chosen: the first of these that is installed.
@@ -73,6 +81,7 @@ struct Installed {
     name: &'static str,
     path: PathBuf,
     index: u32,
+    bold: Option<(PathBuf, u32)>,
 }
 
 pub struct Fonts {
@@ -95,7 +104,14 @@ impl Fonts {
     fn from_files(files: &HashMap<String, PathBuf>) -> Self {
         let installed: Vec<Installed> = KNOWN
             .iter()
-            .filter_map(|f| files.get(f.file).map(|p| Installed { name: f.name, path: p.clone(), index: f.index }))
+            .filter_map(|f| {
+                files.get(f.file).map(|p| Installed {
+                    name: f.name,
+                    path: p.clone(),
+                    index: f.index,
+                    bold: (!f.bold.is_empty()).then(|| files.get(f.bold).map(|b| (b.clone(), f.bold_index))).flatten(),
+                })
+            })
             .collect();
         let fallback = FALLBACKS.iter().find_map(|(f, i)| files.get(*f).map(|p| (p.clone(), *i)));
         let selected = AUTO
@@ -120,6 +136,16 @@ impl Fonts {
         FontFamily::Name(MAP_FAMILY.into())
     }
 
+    /// The same font in its real bold face.
+    pub fn bold_family() -> FontFamily {
+        FontFamily::Name(MAP_BOLD_FAMILY.into())
+    }
+
+    /// True when the chosen font has an installed bold face (otherwise bold is faked by overdrawing).
+    pub fn has_real_bold(&self) -> bool {
+        self.selected > 0 && self.installed.get(self.selected - 1).map_or(false, |f| f.bold.is_some())
+    }
+
     /// (Re)build the label family for the current choice. Call at start-up and after a change.
     pub fn apply(&self, ctx: &egui::Context) {
         let mut defs = FontDefinitions::default();
@@ -142,7 +168,20 @@ impl Fonts {
                 family.push("map-cjk".to_owned());
             }
         }
+        // The bold family: the real bold face first when there is one (else it just repeats the
+        // regular one and the caller fakes the weight).
+        let mut bold: Vec<String> = Vec::new();
+        if self.selected > 0 {
+            if let Some((path, index)) = self.installed.get(self.selected - 1).and_then(|f| f.bold.as_ref()) {
+                if let Some(data) = load(path, *index) {
+                    defs.font_data.insert("map-main-bold".to_owned(), Arc::new(data));
+                    bold.push("map-main-bold".to_owned());
+                }
+            }
+        }
+        bold.extend(family.iter().cloned());
         defs.families.insert(Self::family(), family);
+        defs.families.insert(Self::bold_family(), bold);
         ctx.set_fonts(defs);
     }
 }

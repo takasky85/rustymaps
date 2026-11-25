@@ -162,6 +162,8 @@ struct App {
     show_trains: bool,
     /// Frame rate of animations (planes, trains) when nothing else is happening.
     anim_fps: u32,
+    /// Index into `ui::UI_SIZES`.
+    ui_size: usize,
     /// 0 = smooth (supersampled) plane edges, 1 = fast.
     plane_quality: usize,
     /// Which tab of the control bar is open.
@@ -261,6 +263,7 @@ impl App {
             flat_stations: true,
             show_trains: true,
             anim_fps: 60,
+            ui_size: 1,
             plane_quality: 0,
             tab: None,
             search_text: String::new(),
@@ -633,7 +636,7 @@ impl eframe::App for App {
 
             // --- labels ---
             if self.show_labels {
-                let ls = LabelStyle { scale: LABEL_SIZES[self.label_size].1, bold: self.label_bold, dark: self.palette.dark(), family: fonts::Fonts::family() };
+                let ls = LabelStyle { scale: LABEL_SIZES[self.label_size].1, bold: self.label_bold, dark: self.palette.dark(), family: fonts::Fonts::family(), real_bold: self.fonts.has_real_bold() };
                 let map_labels = if focus > 0.5 { &frame_tiles.labels[..0] } else { &frame_tiles.labels[..] };
                 draw_labels(&painter, rect, &pr, zf, map_labels, extras, &ls);
             }
@@ -823,6 +826,8 @@ struct LabelStyle {
     bold: bool,
     dark: bool,
     family: egui::FontFamily,
+    /// The chosen font has an installed bold face, so bold uses it instead of overdrawing.
+    real_bold: bool,
 }
 
 /// Places labels greedily by priority; a label that would overlap one already placed is dropped.
@@ -854,12 +859,14 @@ fn draw_labels(
     cands.sort_by(|a, b| a.priority.partial_cmp(&b.priority).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut placed: Vec<egui::Rect> = Vec::new();
-    let bold = if ls.bold { 0.45_f32 } else { 0.0 };
+    let fake_bold = ls.bold && !ls.real_bold;
+    let bold = if fake_bold { 0.45_f32 } else { 0.0 };
+    let family = if ls.bold && ls.real_bold { fonts::Fonts::bold_family() } else { ls.family.clone() };
     for c in cands.into_iter().take(700) {
         if placed.len() >= 220 {
             break;
         }
-        let font = egui::FontId::new(c.size * ls.scale, ls.family.clone());
+        let font = egui::FontId::new(c.size * ls.scale, family.clone());
         let col = egui::Color32::from_rgb(c.color[0], c.color[1], c.color[2]);
         let halo = egui::Color32::from_rgb(c.halo[0], c.halo[1], c.halo[2]);
         let main = painter.layout_no_wrap(c.text.clone(), font.clone(), col);
@@ -875,8 +882,8 @@ fn draw_labels(
         for (dx, dy) in [(-o, 0.0), (o, 0.0), (0.0, -o), (0.0, o), (-o, -o), (o, -o), (-o, o), (o, o)] {
             painter.galley(r.min + egui::vec2(dx, dy), shadow.clone(), halo);
         }
-        if ls.bold {
-            // No bold font is bundled: fatten the strokes by drawing the text a little off-centre.
+        if fake_bold {
+            // No bold face is installed: fatten the strokes by drawing the text a little off-centre.
             for (dx, dy) in [(-bold, 0.0), (bold, 0.0), (0.0, -bold * 0.6), (0.0, bold * 0.6)] {
                 painter.galley(r.min + egui::vec2(dx, dy), main.clone(), col);
             }

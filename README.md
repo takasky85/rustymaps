@@ -33,7 +33,7 @@ builds keep them. The app always asks for the discrete / high-performance GPU fi
 ## Map styles and labels
 
 18 styles: OSM Standard, OSM Bright, OpenFreeMap Liberty, Positron (light), Dark Matter, Voyager, OSM Humanitarian,
-OpenTopoMap, CyclOSM, OSM Transport, Stamen Terrain, Stamen Toner, Monochrome, Vintage, Midnight, Blueprint, and two Google-Maps-inspired looks, *Maps Light* and *Maps Night*. These are
+OpenTopoMap, CyclOSM, OSM Transport, Stamen Terrain, Stamen Toner, Monochrome, Vintage, Midnight, Blueprint, and two Google-Maps-inspired looks, *Google-like Light* and *Google-like Night*. These are
 **colour recreations** of those looks on the one vector data set the app uses (OpenFreeMap). The real styles also differ in
 which features they draw, symbols, hillshading and so on, which a recreation cannot copy; dark styles switch to light
 labels. **Transit focus** (on by default) dims the base map and hides its labels while a subway map is showing, leaving only the subway labels; the dimming is adjustable. Labels can be hidden, set to Small / Medium / Large / X-large, and made bolder (no bold font is bundled, so bold

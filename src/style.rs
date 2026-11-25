@@ -243,7 +243,7 @@ const PALETTES: &[PaletteDef] = &[
     // Inspired by the look of Google Maps: pale warm-grey land, soft green parks, light blue water,
     // white streets with a grey edge and warm yellow-orange highways.
     PaletteDef {
-        name: "Maps Light (Google-like)",
+        name: "Google-like Light",
         dark: false,
         colors: [
             0xf3f2ee, 0xffffff, 0xf2ecd9, 0xecf0dd, 0xdcecd0, 0xd0e6d3,
@@ -255,7 +255,7 @@ const PALETTES: &[PaletteDef] = &[
     },
     // The dark "night" look often used with Google Maps.
     PaletteDef {
-        name: "Maps Night (Google-like)",
+        name: "Google-like Night",
         dark: true,
         colors: [
             0x242f3e, 0x3a4556, 0x2b3646, 0x28344a, 0x263c3f, 0x253a3d,
@@ -278,6 +278,12 @@ impl Palette {
 
     pub fn name(self) -> &'static str {
         PALETTES[self.0].name
+    }
+
+    /// Four representative colours (land, water, park, main road) as 0xRRGGBB, for little previews.
+    pub fn swatch(self) -> [u32; 4] {
+        let c = &PALETTES[self.0].colors;
+        [c[BG as usize], c[WATER as usize], c[PARK as usize], c[ROAD_PRIMARY as usize]]
     }
 
     /// Dark map: labels switch to light text on a dark halo.
