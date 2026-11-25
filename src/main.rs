@@ -136,6 +136,9 @@ struct App {
     srgb: bool,
     gpu_name: String,
     fps: f64,
+    /// Frames, map redraws and plane redraws per second, measured over the last second.
+    rates: [u32; 3],
+    rate_since: (f64, u32, u64, u64),
     stats: Stats,
     view_h: f64,
     data_dir: std::path::PathBuf,
@@ -242,6 +245,8 @@ impl App {
             srgb,
             gpu_name,
             fps: 60.0,
+            rates: [0; 3],
+            rate_since: (0.0, 0, 0, 0),
             stats: Stats { drawn: 0, loaded: 0, pending: 0, failed: 0 },
             view_h: 800.0,
             data_dir,
@@ -454,6 +459,18 @@ impl eframe::App for App {
         let dt = ctx.input(|i| i.stable_dt) as f64;
         if dt > 0.0 {
             self.fps = self.fps * 0.9 + (1.0 / dt) * 0.1;
+        }
+        // Once a second: how many frames were drawn, and how many of them really redrew the map / planes.
+        {
+            use std::sync::atomic::Ordering::Relaxed;
+            self.rate_since.1 += 1;
+            if now - self.rate_since.0 >= 1.0 {
+                let (m, pl) = (gpu::MAP_REDRAWS.load(Relaxed), plane::PLANE_REDRAWS.load(Relaxed));
+                let span = (now - self.rate_since.0).max(0.001);
+                let per = |n: u64| (n as f64 / span).round() as u32;
+                self.rates = [per(self.rate_since.1 as u64), per(m - self.rate_since.2), per(pl - self.rate_since.3)];
+                self.rate_since = (now, 0, m, pl);
+            }
         }
         self.transit.poll();
         self.search.poll();

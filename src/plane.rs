@@ -9,6 +9,9 @@ use eframe::wgpu::util::DeviceExt;
 
 use crate::data::{ModelData, MODEL_HEADER, VERTEX_SIZE};
 
+/// How many times the planes have been redrawn (shown in the top bar for diagnosis).
+pub static PLANE_REDRAWS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 /// One aircraft to draw this frame.
@@ -311,6 +314,7 @@ impl PlaneGpu {
             return;
         }
         self.key = key;
+        PLANE_REDRAWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.ensure_uniforms(device, self.draws.len());
         for (i, d) in self.draws.iter().enumerate() {
             let u = Uniform { mvp: d.mvp, nrm: d.nrm, flags: [if srgb { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0] };

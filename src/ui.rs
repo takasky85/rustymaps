@@ -102,7 +102,12 @@ impl App {
                     if ui.button("Reset view").on_hover_text("north up, looking straight down, centred (R)").clicked() {
                         self.reset_orientation(now);
                     }
-                    ui.label(RichText::new(format!("{:.0} fps", self.fps)).monospace().weak());
+                    ui.label(
+                        RichText::new(format!("{}/s  map {}  planes {}", self.rates[0], self.rates[1], self.rates[2]))
+                            .monospace()
+                            .weak(),
+                    )
+                    .on_hover_text("frames drawn per second, and how many of them redrew the map / the planes on the GPU");
                 });
             });
         });
@@ -403,6 +408,7 @@ impl App {
         });
         ui.horizontal(|ui| {
             ui.label("Animation rate");
+            ui.selectable_value(&mut self.anim_fps, 15, "15 fps (lightest)");
             ui.selectable_value(&mut self.anim_fps, 30, "30 fps (light)");
             ui.selectable_value(&mut self.anim_fps, 60, "60 fps");
         });

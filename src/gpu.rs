@@ -13,6 +13,9 @@ use crate::mesh::{self, FillVertex, LineInst, TileMesh};
 use crate::style;
 use crate::tile_id::TileId;
 
+/// How many times the map image has been redrawn (shown in the top bar for diagnosis).
+pub static MAP_REDRAWS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Reinterprets a slice of plain `repr(C)` data (no padding) as bytes.
 fn as_bytes<T: Copy>(s: &[T]) -> &[u8] {
     // SAFETY: only used with padding-free repr(C) types made of f32/u32.
@@ -460,6 +463,7 @@ impl egui_wgpu::CallbackTrait for MapCallback {
         if !size_changed && key == gpu.key && self.draw == gpu.key_draw {
             return Vec::new(); // nothing moved: reuse the picture from last time
         }
+        MAP_REDRAWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         gpu.key = key;
         gpu.key_draw.clear();
         gpu.key_draw.extend_from_slice(&self.draw);
