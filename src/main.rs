@@ -200,7 +200,9 @@ impl eframe::App for App {
             let pos = self.cam.pos();
             let globals = Globals {
                 view_proj: self.cam.view_proj_cols(w / h),
+                proj: self.cam.proj_cols(w / h),
                 cam_pos: [pos[0] as f32, pos[1] as f32, pos[2] as f32, if self.srgb { 1.0 } else { 0.0 }],
+                cam_rel: [self.cam.lat.cos() as f32, self.cam.lat.sin() as f32, self.cam.alt as f32, 0.0],
                 screen: [w as f32 * ppp, h as f32 * ppp, 0.0, 0.0],
                 styles: style::table(zf, ppp),
             };
@@ -208,7 +210,11 @@ impl eframe::App for App {
             painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(8, 10, 22));
             painter.add(egui_wgpu::Callback::new_paint_callback(
                 rect,
-                MapCallback { globals, draw: frame_tiles.draw.clone() },
+                MapCallback {
+                    globals,
+                    cam_merc: camera::lonlat_to_merc(self.cam.lon, self.cam.lat),
+                    draw: frame_tiles.draw.clone(),
+                },
             ));
 
             // --- labels (egui) ---

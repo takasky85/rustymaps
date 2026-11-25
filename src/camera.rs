@@ -12,7 +12,7 @@ pub type V3 = [f64; 3];
 /// Vertical field of view (45 degrees).
 pub const FOV_Y: f64 = std::f64::consts::FRAC_PI_4;
 /// Lowest allowed altitude, in planet radii (~5 km). Limited by f32 precision on the GPU.
-pub const MIN_ALT: f64 = 0.0008;
+pub const MIN_ALT: f64 = 0.00002;
 pub const MAX_ALT: f64 = 6.0;
 /// 85 degrees in radians (just inside the Web Mercator limit).
 pub const MAX_LAT: f64 = 1.4835298641951802;
@@ -111,6 +111,31 @@ impl Camera {
         (right, up, f)
     }
 
+    /// Row-major perspective projection (right-handed, depth 0..1). Tiles are drawn in
+    /// camera-relative coordinates (see shader.wgsl), so this is all they need.
+    pub fn proj(&self, aspect: f64) -> [[f64; 4]; 4] {
+        let near = (self.alt * 0.05).max(1e-7);
+        let far = self.dist() + 1.0;
+        let t = 1.0 / (FOV_Y * 0.5).tan();
+        [
+            [t / aspect, 0.0, 0.0, 0.0],
+            [0.0, t, 0.0, 0.0],
+            [0.0, 0.0, far / (near - far), near * far / (near - far)],
+            [0.0, 0.0, -1.0, 0.0],
+        ]
+    }
+
+    pub fn proj_cols(&self, aspect: f64) -> [f32; 16] {
+        let m = self.proj(aspect);
+        let mut out = [0f32; 16];
+        for col in 0..4 {
+            for row in 0..4 {
+                out[col * 4 + row] = m[row][col] as f32;
+            }
+        }
+        out
+    }
+
     /// Row-major view-projection matrix (right-handed, depth 0..1).
     pub fn view_proj(&self, aspect: f64) -> [[f64; 4]; 4] {
         let c = self.pos();
@@ -121,15 +146,7 @@ impl Camera {
             [-f[0], -f[1], -f[2], dot(f, c)],
             [0.0, 0.0, 0.0, 1.0],
         ];
-        let near = (self.alt * 0.05).max(1e-6);
-        let far = self.dist() + 1.0;
-        let t = 1.0 / (FOV_Y * 0.5).tan();
-        let p = [
-            [t / aspect, 0.0, 0.0, 0.0],
-            [0.0, t, 0.0, 0.0],
-            [0.0, 0.0, far / (near - far), near * far / (near - far)],
-            [0.0, 0.0, -1.0, 0.0],
-        ];
+        let p = self.proj(aspect);
         let mut m = [[0.0; 4]; 4];
         for (i, row) in m.iter_mut().enumerate() {
             for (j, cell) in row.iter_mut().enumerate() {
@@ -287,5 +304,37 @@ mod tests {
         let mut cam = Camera::from_degrees(0.0, 0.0, 0.01);
         cam.pan(0.0, 100.0, 800.0);
         assert!(cam.lat > 0.0, "dragging down moves the camera north");
+    }
+
+    /// f64 mirror of the shader's cancellation-free camera-relative position:
+    /// (east, north, radial offset) of the surface point at mercator-radian offset
+    /// `dy` and longitude offset `dl` from the point under the camera.
+    fn rel_formula(lat_c: f64, dl: f64, dy: f64) -> V3 {
+        let (cc, sc) = (lat_c.cos(), lat_c.sin());
+        let t = dy.tanh();
+        let sg = 1.0 / dy.cosh();
+        let d = 1.0 + sc * t;
+        let sh = (0.5 * dl).sin();
+        let q = t * t / (1.0 + sg) + sg * 2.0 * sh * sh;
+        [cc * sg * dl.sin() / d, cc * (sc * q + t) / d, -cc * cc * q / d]
+    }
+
+    #[test]
+    fn camera_relative_formula_matches_absolute() {
+        for &(lon, lat) in &[(-2.136, 0.659), (0.3, -0.2), (3.0, 1.2), (0.0, 0.0)] {
+            let cam = Camera { lon, lat, alt: 0.1 };
+            let y_c = lat.sin().atanh();
+            let (r, u, _f) = cam.basis();
+            let d = cam.dir();
+            for &(dl, dy) in &[(0.0, 0.0), (1e-3, -2e-3), (0.3, 0.2), (-1.0, 0.9), (2.5, -2.0), (3.1, 2.5)] {
+                let p = lonlat_to_vec(lon + dl, (y_c + dy).sinh().atan());
+                let rel = sub(p, d);
+                let want = [dot(rel, r), dot(rel, u), dot(rel, d)];
+                let got = rel_formula(lat, dl, dy);
+                for i in 0..3 {
+                    assert!((want[i] - got[i]).abs() < 1e-9, "{lon} {lat} {dl} {dy}: {want:?} vs {got:?}");
+                }
+            }
+        }
     }
 }

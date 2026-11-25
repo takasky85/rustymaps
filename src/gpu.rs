@@ -19,13 +19,18 @@ fn as_bytes<T: Copy>(s: &[T]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(s.as_ptr() as *const u8, std::mem::size_of_val(s)) }
 }
 
-/// Per-frame uniforms. Layout must match `Globals` in shader.wgsl (1120 bytes).
+/// Per-frame uniforms. Layout must match `Globals` in shader.wgsl (1200 bytes).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Globals {
+    /// Absolute world -> clip; only the base sphere uses it.
     pub view_proj: [f32; 16],
+    /// Camera-relative view -> clip; tiles use it.
+    pub proj: [f32; 16],
     /// xyz = camera position (planet radii), w = 1.0 when the target is sRGB.
     pub cam_pos: [f32; 4],
+    /// x = cos(camera latitude), y = sin(camera latitude), z = altitude.
+    pub cam_rel: [f32; 4],
     /// xy = viewport size in physical pixels.
     pub screen: [f32; 4],
     pub styles: [[f32; 8]; style::TABLE_SIZE],
@@ -36,7 +41,10 @@ const LINE_ATTRS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Flo
 const BASE_ATTRS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![0 => Float32x3];
 
 struct TileGpu {
-    _uniform: wgpu::Buffer,
+    /// Updated every frame with the tile's offset from the camera.
+    uniform: wgpu::Buffer,
+    origin: (f64, f64),
+    unit: f64,
     bind_group: wgpu::BindGroup,
     fill: Option<wgpu::Buffer>,
     fill_count: u32,
@@ -241,11 +249,11 @@ impl MapGpu {
     /// Uploads a freshly built tile. Cheap: three small buffers and a bind group.
     pub fn add_tile(&mut self, device: &wgpu::Device, id: TileId, mesh: &TileMesh) {
         let (ox, oy, size) = id.origin_size();
-        let uniform_data: [f32; 4] = [ox as f32, oy as f32, size as f32, mesh::EXTENT];
+        let uniform_data: [f32; 4] = [0.0; 4];
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("tile uniform"),
             contents: as_bytes(&uniform_data),
-            usage: wgpu::BufferUsages::UNIFORM,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("tile bg"),
@@ -269,7 +277,9 @@ impl MapGpu {
         self.tiles.insert(
             id,
             TileGpu {
-                _uniform: uniform,
+                uniform,
+                origin: (ox, oy),
+                unit: size / mesh::EXTENT as f64,
                 bind_group,
                 fill,
                 fill_count: mesh.fills.len() as u32,
@@ -288,6 +298,8 @@ impl MapGpu {
 /// ordered from lowest zoom to highest so detailed tiles paint over coarse ones.
 pub struct MapCallback {
     pub globals: Globals,
+    /// Camera position in normalized mercator (0..1), full f64 precision.
+    pub cam_merc: (f64, f64),
     pub draw: Vec<TileId>,
 }
 
@@ -302,6 +314,18 @@ impl egui_wgpu::CallbackTrait for MapCallback {
     ) -> Vec<wgpu::CommandBuffer> {
         if let Some(gpu) = callback_resources.get_mut::<MapGpu>() {
             queue.write_buffer(&gpu.globals_buf, 0, as_bytes(std::slice::from_ref(&self.globals)));
+            // Tile origin minus camera, subtracted in f64 so the f32 result is tiny and exact
+            // however far we zoom in.
+            let (cx, cy) = self.cam_merc;
+            for id in &self.draw {
+                if let Some(t) = gpu.tiles.get(id) {
+                    let mut dx = t.origin.0 - cx;
+                    dx -= dx.round(); // shortest way around the antimeridian
+                    let dy = t.origin.1 - cy;
+                    let data: [f32; 4] = [dx as f32, dy as f32, t.unit as f32, 0.0];
+                    queue.write_buffer(&t.uniform, 0, as_bytes(&data));
+                }
+            }
         }
         Vec::new()
     }

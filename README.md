@@ -24,7 +24,8 @@ discrete / high-performance GPU first.
 - Tiles (`z/x/y.pbf`, OpenMapTiles schema) are downloaded by 4 worker threads, decoded by a small built-in Mapbox
   Vector Tile reader, triangulated (`earcutr`) and cut into pieces of at most ~3° so they bend with the globe.
 - The GPU maps every vertex from Web Mercator onto the sphere in the vertex shader, so zooming and rotating never
-  re-uploads geometry. Zoomed in far enough, the sphere is indistinguishable from a flat map.
+  re-uploads geometry. Positions are computed relative to the point under the camera with cancellation-free
+  formulas, so they stay precise at any zoom. Zoomed in far enough, the sphere is indistinguishable from a flat map.
 - Roads/borders are drawn as constant-pixel-width anti-aliased lines; widths and visibility follow the zoom level.
 - While a tile is still loading, its nearest loaded parent tile is shown instead.
 - Labels are projected from the tiles' point features and placed by priority with simple collision avoidance.
@@ -38,7 +39,7 @@ tiles back off (8 s, 16 s, 32 s, 60 s) instead of being retried in a loop.
 
 ## Known limits
 
-- Maximum zoom is about level 13.7: the GPU works in 32-bit floats, and deeper zoom would make geometry jitter.
+- Maximum zoom is about level 19. The data itself stops at level 14, so beyond that you are magnifying the level-14 geometry (roads and outlines stay crisp, but there is no extra detail).
 - The view is north-up (no tilt or rotation).
 - While zooming quickly, areas with a loaded parent but loading children may briefly show doubled road lines.
 - Labels are horizontal and do not follow curves.

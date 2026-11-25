@@ -1,8 +1,11 @@
 // Globe + vector map shader.
 //
-// Tile geometry is stored in tile-local units (0..4096). The vertex shader
-// maps those to normalized Web Mercator, then onto the unit sphere, then
-// through the camera. Nothing is ever re-uploaded when the camera moves.
+// Tile geometry is stored in tile-local units (0..4096). The vertex shader maps
+// those to normalized Web Mercator and onto the unit sphere *relative to the
+// point under the camera*, using formulas without cancellation, so the result
+// stays precise at any zoom (absolute f32 sphere coordinates would jitter once a
+// pixel is smaller than ~1e-7 planet radii). Nothing is re-uploaded when the
+// camera moves; only a tiny per-tile offset changes each frame.
 //
 // There is no depth buffer: the far side of the planet is removed with a
 // horizon test, and layers are painted back-to-front by draw order.
@@ -13,14 +16,18 @@ struct Style {
 };
 
 struct Globals {
-    view_proj: mat4x4<f32>,
+    view_proj: mat4x4<f32>,  // absolute world -> clip (base sphere only)
+    proj: mat4x4<f32>,       // camera-relative view -> clip (tiles)
     cam_pos: vec4<f32>,  // xyz = camera position in planet radii, w = 1 if target is sRGB
+    cam_rel: vec4<f32>,  // x = cos(camera lat), y = sin(camera lat), z = altitude
     screen: vec4<f32>,   // xy = viewport size in physical pixels
     styles: array<Style, 32>,
 };
 
 struct Tile {
-    os: vec4<f32>,       // xy = tile origin (mercator 0..1), z = tile size, w = extent
+    // xy = tile origin minus camera, in normalized mercator (computed in f64 on the CPU),
+    // z = mercator size of one tile-local unit.
+    rel: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -28,15 +35,29 @@ struct Tile {
 
 const PI: f32 = 3.14159265358979;
 
-fn tile_to_merc(p: vec2<f32>) -> vec2<f32> {
-    return tile.os.xy + p / tile.os.w * tile.os.z;
+// Position of a tile-local point relative to the surface point under the camera:
+// x = east, y = north, z = radial offset (<= 0, equals cos(angle) - 1).
+fn rel_pos(p: vec2<f32>) -> vec3<f32> {
+    let dm = tile.rel.xy + p * tile.rel.z;
+    let dl = dm.x * 2.0 * PI;
+    let dy = -dm.y * 2.0 * PI;
+    let t = tanh(dy);
+    let sg = 1.0 / cosh(dy);
+    let cc = g.cam_rel.x;
+    let sc = g.cam_rel.y;
+    let d = 1.0 + sc * t;
+    let sh = sin(0.5 * dl);
+    let q = t * t / (1.0 + sg) + sg * 2.0 * sh * sh;
+    return vec3<f32>(cc * sg * sin(dl) / d, cc * (sc * q + t) / d, -cc * cc * q / d);
 }
 
-fn merc_to_sphere(m: vec2<f32>) -> vec3<f32> {
-    let lon = (m.x - 0.5) * 2.0 * PI;
-    let lat = atan(sinh(PI * (1.0 - 2.0 * m.y)));
-    let cl = cos(lat);
-    return vec3<f32>(cl * sin(lon), sin(lat), cl * cos(lon));
+fn rel_clip(r: vec3<f32>) -> vec4<f32> {
+    return g.proj * vec4<f32>(r.x, r.y, r.z - g.cam_rel.z, 1.0);
+}
+
+// > 0 when the point is on the visible side of the horizon.
+fn rel_horizon(r: vec3<f32>) -> f32 {
+    return g.cam_rel.z + r.z * (1.0 + g.cam_rel.z);
 }
 
 // Premultiplied output; converts to linear when the surface format is sRGB.
@@ -87,11 +108,11 @@ struct FillOut {
 
 @vertex
 fn vs_fill(@location(0) p: vec2<f32>, @location(1) style: u32) -> FillOut {
-    let s = merc_to_sphere(tile_to_merc(p));
+    let r = rel_pos(p);
     var o: FillOut;
-    o.pos = g.view_proj * vec4<f32>(s, 1.0);
+    o.pos = rel_clip(r);
     o.color = g.styles[style].color;
-    o.horizon = dot(s, g.cam_pos.xyz) - 1.0;
+    o.horizon = rel_horizon(r);
     return o;
 }
 
@@ -136,10 +157,10 @@ fn vs_line(
     let t = ts[vi];
     let side = ss[vi];
 
-    let sa = merc_to_sphere(tile_to_merc(ab.xy));
-    let sb = merc_to_sphere(tile_to_merc(ab.zw));
-    let ca = g.view_proj * vec4<f32>(sa, 1.0);
-    let cb = g.view_proj * vec4<f32>(sb, 1.0);
+    let ra = rel_pos(ab.xy);
+    let rb = rel_pos(ab.zw);
+    let ca = rel_clip(ra);
+    let cb = rel_clip(rb);
 
     // Work in centred pixel space (y up).
     let res = g.screen.xy;
@@ -159,7 +180,7 @@ fn vs_line(
     let at_end = t > 0.5;
     let base = select(pa, pb, at_end);
     let clip = select(ca, cb, at_end);
-    let sph = select(sa, sb, at_end);
+    let hz = select(rel_horizon(ra), rel_horizon(rb), at_end);
 
     // Square caps (extend by `pad` along the line) hide gaps at joints.
     let px = base + dir * (t * 2.0 - 1.0) * pad + nrm * side * pad;
@@ -167,7 +188,7 @@ fn vs_line(
 
     o.pos = vec4<f32>(ndc * clip.w, clip.z, clip.w);
     o.color = st.color;
-    o.horizon = dot(sph, g.cam_pos.xyz) - 1.0;
+    o.horizon = hz;
     o.dist = side * pad;
     o.half_w = half_w;
     o.casing = st.params.y;
