@@ -20,9 +20,11 @@ jobs:
       - name: Build (release)
         shell: pwsh
         run: |
-          $t = Measure-Command { cargo build --release 2>&1 | ForEach-Object { "$_" } }
-          "Release build took $([math]::Round($t.TotalSeconds)) s" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          if (-not (Test-Path target/release/rustymaps.exe)) { throw "build failed" }
+          $sw = [System.Diagnostics.Stopwatch]::StartNew()
+          cargo build --release
+          $code = $LASTEXITCODE
+          "Release build took $([math]::Round($sw.Elapsed.TotalSeconds)) s (exit $code)" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          if ($code -ne 0) { exit $code }
 
       - name: Package
         shell: pwsh
