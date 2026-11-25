@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Stroke};
 
-use crate::camera::{dot, lonlat_to_vec, normalize, Camera, FOV_Y, V3};
+use crate::camera::{add, cross, dot, lonlat_to_vec, normalize, scale, Camera, Projector, FOV_Y, V3};
 use crate::tiles::USER_AGENT;
 use crate::transit_data::{self, SystemData, SYSTEMS};
 
@@ -432,12 +432,48 @@ fn nearest_gaps(pts: &[Pos2], cap: f32) -> Vec<f32> {
         .collect()
 }
 
+/// 0..1: how strongly a transit map is the subject of the view (a map is switched on, on screen and
+/// faded in). The caller uses it to dim the base map and hide its labels.
+pub fn focus(cam: &Camera, zf: f64, aspect: f64, systems: &[Arc<SystemData>]) -> f32 {
+    let a = map_fade(zf);
+    if a <= 0.0 || !systems.iter().any(|s| may_be_visible(cam, s, aspect)) {
+        return 0.0;
+    }
+    a
+}
+
+/// A circle of `r_px` pixels lying flat on the ground around `p`: its outline projected through the
+/// camera, so it squashes into an ellipse when the view is tilted. `units_per_px` is the ground size
+/// of a pixel at the view centre (used only to pick a sensible probe distance).
+fn flat_circle(pr: &Projector, rect: egui::Rect, p: V3, r_px: f32, units_per_px: f64) -> Option<Vec<Pos2>> {
+    let east = normalize(cross([0.0, 1.0, 0.0], p));
+    let north = cross(p, east);
+    let eps = (units_per_px * 6.0).max(1e-12);
+    let at = |q: V3| pr.project(q).map(|s| Pos2::new(s[0] as f32, s[1] as f32));
+    let s0 = at(p)?;
+    let se = at(add(p, scale(east, eps)))?;
+    let sn = at(add(p, scale(north, eps)))?;
+    let px_per_unit = ((s0.distance(se) + s0.distance(sn)) * 0.5) as f64 / eps;
+    if px_per_unit <= 1e-9 {
+        return None;
+    }
+    let g = r_px as f64 / px_per_unit;
+    let mut pts = Vec::with_capacity(20);
+    for k in 0..20 {
+        let a = std::f64::consts::TAU * k as f64 / 20.0;
+        let q = normalize(add(p, scale(add(scale(east, a.cos()), scale(north, a.sin())), g)));
+        pts.push(at(q)? + rect.min.to_vec2());
+    }
+    Some(pts)
+}
+
 pub fn draw(
     painter: &egui::Painter,
     rect: egui::Rect,
     cam: &Camera,
     zf: f64,
     systems: &[Arc<SystemData>],
+    flat_stations: bool,
 ) -> Vec<StationLabel> {
     let mut labels = Vec::new();
     let fade_a = map_fade(zf);
@@ -459,6 +495,8 @@ pub fn draw(
     let casing_extra = (line_w * 0.28).clamp(1.5, 4.0);
     let ink = Color32::from_rgb(35, 35, 45);
     let mut stations: Vec<(Pos2, &transit_data::Station)> = Vec::new();
+    let flat = flat_stations && cam.pitch > 0.12;
+    let units_per_px = 2.0 * cam.alt * (FOV_Y * 0.5).tan() / h;
 
     for sys in systems {
         if !may_be_visible(cam, sys, w / h) {
@@ -553,7 +591,15 @@ pub fn draw(
             let inter = st.lines.len() >= 2;
             let base = r_zoom.min(gap * 0.36);
             let rr = if inter { base * 1.3 } else { base };
-            painter.circle(*s, rr, Color32::WHITE, Stroke::new(if inter { 2.8_f32 } else { 2.0_f32 }, ink));
+            let stroke = Stroke::new(if inter { 2.8_f32 } else { 2.0_f32 }, ink);
+            match flat.then(|| flat_circle(&pr, rect, st.pos, rr, units_per_px)).flatten() {
+                Some(pts) => {
+                    painter.add(egui::Shape::convex_polygon(pts, Color32::WHITE, stroke));
+                }
+                None => {
+                    painter.circle(*s, rr, Color32::WHITE, stroke);
+                }
+            }
             if !st.name.is_empty() && gap >= MIN_NAME_GAP {
                 labels.push(StationLabel { at: *s + egui::vec2(0.0, -(rr + 10.0)), text: st.name.clone(), interchange: inter });
             }
@@ -590,5 +636,28 @@ mod tests {
         assert!(g[0] < MIN_STATION_GAP);
         assert_eq!(g[2], MIN_NAME_GAP, "60 px apart is beyond the cap");
         assert!(g[3] >= MIN_NAME_GAP);
+    }
+
+    #[test]
+    fn flat_circle_is_round_from_above_and_squashed_when_tilted() {
+        let mut cam = Camera::from_degrees(10.0, 40.0, 0.002);
+        let (w, h) = (1000.0, 800.0);
+        let rect = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(w as f32, h as f32));
+        let upp = 2.0 * cam.alt * (FOV_Y * 0.5).tan() / h;
+        let size = |cam: &Camera| {
+            let pr = cam.projector(w, h);
+            let pts = flat_circle(&pr, rect, cam.dir(), 20.0, upp).unwrap();
+            let (mut lo, mut hi) = (pts[0], pts[0]);
+            for p in &pts {
+                lo = lo.min(*p);
+                hi = hi.max(*p);
+            }
+            (hi.x - lo.x, hi.y - lo.y)
+        };
+        let (a, b) = size(&cam);
+        assert!((a - 40.0).abs() < 1.5 && (b - 40.0).abs() < 1.5, "{a} x {b}");
+        cam.pitch = 1.1;
+        let (a, b) = size(&cam);
+        assert!(b < a * 0.6 && (a - 40.0).abs() < 4.0, "{a} x {b}");
     }
 }

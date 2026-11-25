@@ -163,6 +163,17 @@ impl Route {
         (0..=n).map(|i| self.point(i as f64 / n as f64)).collect()
     }
 
+    /// The route drawn at the aircraft's altitude (scaled by `exaggeration`, like the model), so the
+    /// line runs through the plane instead of along the ground beneath it.
+    pub fn polyline_alt(&self, n: usize, exaggeration: f64) -> Vec<V3> {
+        (0..=n)
+            .map(|i| {
+                let t = i as f64 / n as f64;
+                scale(self.point(t), 1.0 + self.altitude_m(t) * exaggeration / EARTH_RADIUS_M)
+            })
+            .collect()
+    }
+
     #[allow(dead_code)]
     pub fn lonlat_deg(&self, t: f64) -> (f64, f64) {
         let (lo, la) = vec_to_lonlat(self.point(t));
@@ -428,7 +439,7 @@ mod tests {
         let r = Route::new((0.0, 0.0), (0.0, 10.0), 10_000.0, 220.0);
         let st = r.state(0.5, true, 0.0);
         let (lon, lat) = r.lonlat_deg(0.5);
-        let cam = Camera { lon: lon.to_radians(), lat: lat.to_radians(), alt: 0.05, pitch: 0.0, heading: 0.0 };
+        let cam = Camera { lon: lon.to_radians(), lat: lat.to_radians(), alt: 0.05, pitch: 0.0, heading: 0.0, shift: [0.0, 0.0] };
         let (w, h) = (1000.0, 600.0);
         let (mvp, _n) = plane_matrices(&cam, w / h, &st, 100.0, 1.0, 21.0).expect("visible");
         let apply = |p: [f32; 3]| {
@@ -462,10 +473,20 @@ mod tests {
         let r = Route::new((0.0, 0.0), (0.0, 10.0), 10_000.0, 220.0);
         let st = r.state(0.5, true, 0.0);
         // camera on the far side of the planet
-        let far = Camera { lon: std::f64::consts::PI, lat: 0.0, alt: 0.5, pitch: 0.0, heading: 0.0 };
+        let far = Camera { lon: std::f64::consts::PI, lat: 0.0, alt: 0.5, pitch: 0.0, heading: 0.0, shift: [0.0, 0.0] };
         assert!(plane_matrices(&far, 1.5, &st, 100.0, 1.0, 21.0).is_none());
         // camera lower than the plane, looking down: plane is behind it
-        let low = Camera { lon: 0.0, lat: 5.0f64.to_radians(), alt: 0.0002, pitch: 0.0, heading: 0.0 };
+        let low = Camera { lon: 0.0, lat: 5.0f64.to_radians(), alt: 0.0002, pitch: 0.0, heading: 0.0, shift: [0.0, 0.0] };
         assert!(plane_matrices(&low, 1.5, &st, 1.0, 1.0, 21.0).is_none());
+    }
+
+    #[test]
+    fn altitude_polyline_rises_above_the_ground_and_lands_on_it() {
+        let r = Route::of(&AIRCRAFT[0]);
+        let line = r.polyline_alt(100, 10.0);
+        let len = |v: V3| dot(v, v).sqrt();
+        assert!((len(line[0]) - 1.0).abs() < 1e-12 && (len(line[100]) - 1.0).abs() < 1e-12);
+        let top = line.iter().map(|&v| len(v)).fold(0.0, f64::max);
+        assert!(top > 1.0 + 0.5 * AIRCRAFT[0].cruise_alt_m * 10.0 / EARTH_RADIUS_M, "{top}");
     }
 }

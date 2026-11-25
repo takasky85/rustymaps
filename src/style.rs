@@ -240,6 +240,31 @@ const PALETTES: &[PaletteDef] = &[
             0x9cc2f0,
         ],
     },
+    // Inspired by the look of Google Maps: pale warm-grey land, soft green parks, light blue water,
+    // white streets with a grey edge and warm yellow-orange highways.
+    PaletteDef {
+        name: "Maps Light (Google-like)",
+        dark: false,
+        colors: [
+            0xf3f2ee, 0xffffff, 0xf2ecd9, 0xecf0dd, 0xdcecd0, 0xd0e6d3,
+            0xc9e3bd, 0xeeede8, 0xe8e7e2, 0xc6e7c0, 0xaadaff, 0xe4e2dc,
+            0xaadaff, 0x6aa7e8, 0xd9d6cf, 0xbcc0c6, 0xffffff, 0xffffff,
+            0xffffff, 0xfff6dc, 0xfde9b2, 0xfbd67e, 0xf9c14a, 0xcfc9db,
+            0xa89fba,
+        ],
+    },
+    // The dark "night" look often used with Google Maps.
+    PaletteDef {
+        name: "Maps Night (Google-like)",
+        dark: true,
+        colors: [
+            0x242f3e, 0x3a4556, 0x2b3646, 0x28344a, 0x263c3f, 0x253a3d,
+            0x233a3a, 0x2a3547, 0x273244, 0x263c3f, 0x17263c, 0x2f3b4d,
+            0x17263c, 0x3b5e8c, 0x38414e, 0x3b4658, 0x38414e, 0x38414e,
+            0x3a4352, 0x41495a, 0x5a5648, 0x6a5f4a, 0x746855, 0x3d4b60,
+            0x4b6878,
+        ],
+    },
 ];
 
 impl Palette {

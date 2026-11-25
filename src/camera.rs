@@ -102,11 +102,17 @@ pub struct Camera {
     pub pitch: f64,
     /// Compass bearing of the screen's "up" direction on the ground, radians (0 = north up).
     pub heading: f64,
+    /// Where the target sits on screen, as an offset from the centre in normalised device units
+    /// (x right, y up; the screen spans -1..1). Lets you drag the whole globe around the window.
+    pub shift: [f64; 2],
 }
+
+/// How far the view may be shifted off-centre (normalised device units).
+pub const MAX_SHIFT: f64 = 1.3;
 
 impl Camera {
     pub fn from_degrees(lon_deg: f64, lat_deg: f64, alt: f64) -> Self {
-        let mut c = Camera { lon: lon_deg.to_radians(), lat: lat_deg.to_radians(), alt, pitch: 0.0, heading: 0.0 };
+        let mut c = Camera { lon: lon_deg.to_radians(), lat: lat_deg.to_radians(), alt, pitch: 0.0, heading: 0.0, shift: [0.0, 0.0] };
         c.normalize();
         c
     }
@@ -117,6 +123,7 @@ impl Camera {
         self.alt = self.alt.clamp(MIN_ALT, MAX_ALT);
         self.pitch = self.pitch.clamp(0.0, MAX_PITCH);
         self.heading = wrap_pi(self.heading);
+        self.shift = [self.shift[0].clamp(-MAX_SHIFT, MAX_SHIFT), self.shift[1].clamp(-MAX_SHIFT, MAX_SHIFT)];
     }
 
     /// Ground direction the camera looks along, in the target's (east, north) frame.
@@ -128,6 +135,14 @@ impl Camera {
     pub fn reset_orientation(&mut self) {
         self.pitch = 0.0;
         self.heading = 0.0;
+        self.shift = [0.0, 0.0];
+    }
+
+    /// Move the target on screen by `dx`,`dy` pixels (the globe follows the cursor).
+    pub fn shift_by(&mut self, dx: f64, dy: f64, w: f64, h: f64) {
+        self.shift[0] += dx / w * 2.0;
+        self.shift[1] -= dy / h * 2.0;
+        self.normalize();
     }
 
     /// Unit vector from the planet centre towards the target point.
@@ -179,9 +194,10 @@ impl Camera {
     /// Perspective projection with explicit clip distances.
     pub fn proj_nf(&self, aspect: f64, near: f64, far: f64) -> [[f64; 4]; 4] {
         let t = 1.0 / (FOV_Y * 0.5).tan();
+        // The screen shift is added in normalised device units: x' = x + shift * w, and w = -z.
         [
-            [t / aspect, 0.0, 0.0, 0.0],
-            [0.0, t, 0.0, 0.0],
+            [t / aspect, 0.0, -self.shift[0], 0.0],
+            [0.0, t, -self.shift[1], 0.0],
             [0.0, 0.0, far / (near - far), near * far / (near - far)],
             [0.0, 0.0, -1.0, 0.0],
         ]
@@ -237,8 +253,8 @@ impl Camera {
         }
         let t = (FOV_Y * 0.5).tan();
         let aspect = w / h;
-        let nx = dot(rel, r) / (z * t * aspect);
-        let ny = dot(rel, u) / (z * t);
+        let nx = dot(rel, r) / (z * t * aspect) + self.shift[0];
+        let ny = dot(rel, u) / (z * t) + self.shift[1];
         Some([(nx * 0.5 + 0.5) * w, (0.5 - ny * 0.5) * h])
     }
 
@@ -246,8 +262,8 @@ impl Camera {
     pub fn pick(&self, sx: f64, sy: f64, w: f64, h: f64) -> Option<(f64, f64)> {
         let (r, u, f) = self.basis();
         let t = (FOV_Y * 0.5).tan();
-        let nx = (sx / w) * 2.0 - 1.0;
-        let ny = 1.0 - (sy / h) * 2.0;
+        let nx = (sx / w) * 2.0 - 1.0 - self.shift[0];
+        let ny = 1.0 - (sy / h) * 2.0 - self.shift[1];
         let dir = normalize(add(add(scale(r, nx * t * (w / h)), scale(u, ny * t)), f));
         let c = self.pos();
         let b = dot(c, dir);
@@ -304,6 +320,8 @@ pub struct Projector {
     f: V3,
     kx: f64,
     ky: f64,
+    sx: f64,
+    sy: f64,
     w: f64,
     h: f64,
 }
@@ -312,7 +330,7 @@ impl Camera {
     pub fn projector(&self, w: f64, h: f64) -> Projector {
         let (r, u, f) = self.basis();
         let t = (FOV_Y * 0.5).tan();
-        Projector { c: self.pos(), r, u, f, kx: t * (w / h), ky: t, w, h }
+        Projector { c: self.pos(), r, u, f, kx: t * (w / h), ky: t, sx: self.shift[0], sy: self.shift[1], w, h }
     }
 }
 
@@ -329,8 +347,8 @@ impl Projector {
         if z <= 1e-9 {
             return None;
         }
-        let nx = dot(rel, self.r) / (z * self.kx);
-        let ny = dot(rel, self.u) / (z * self.ky);
+        let nx = dot(rel, self.r) / (z * self.kx) + self.sx;
+        let ny = dot(rel, self.u) / (z * self.ky) + self.sy;
         Some([(nx * 0.5 + 0.5) * self.w, (0.5 - ny * 0.5) * self.h])
     }
 }
@@ -398,7 +416,7 @@ mod tests {
     fn zoom_helpers_are_inverse() {
         let lat = 37.8f64.to_radians();
         let alt = Camera::alt_for_zoom(12.5, lat, 900.0);
-        let cam = Camera { lon: 0.0, lat, alt, pitch: 0.0, heading: 0.0 };
+        let cam = Camera { lon: 0.0, lat, alt, pitch: 0.0, heading: 0.0, shift: [0.0, 0.0] };
         assert!(close(cam.zoom_f(900.0), 12.5, 1e-9));
         // Globe view should land near zoom 2-3 for a normal window.
         let globe = Camera::from_degrees(0.0, 0.0, 2.2);
@@ -432,7 +450,7 @@ mod tests {
     #[test]
     fn camera_relative_formula_matches_absolute() {
         for &(lon, lat) in &[(-2.136, 0.659), (0.3, -0.2), (3.0, 1.2), (0.0, 0.0)] {
-            let cam = Camera { lon, lat, alt: 0.1, pitch: 0.0, heading: 0.0 };
+            let cam = Camera { lon, lat, alt: 0.1, pitch: 0.0, heading: 0.0, shift: [0.0, 0.0] };
             let y_c = lat.sin().atanh();
             let (r, u, _f) = cam.basis();
             let d = cam.dir();
@@ -451,7 +469,7 @@ mod tests {
     #[test]
     fn relative_matrix_agrees_with_world_matrix_under_tilt() {
         for &(pitch, heading) in &[(0.0, 0.0), (0.6, 0.0), (1.1, 0.0), (0.9, 1.0), (0.5, -2.3)] {
-            let cam = Camera { lon: -2.136, lat: 0.659, alt: 0.01, pitch, heading };
+            let cam = Camera { lon: -2.136, lat: 0.659, alt: 0.01, pitch, heading, shift: [0.0, 0.0] };
             let y_c = cam.lat.sin().atanh();
             let (aspect, vp, rp) = (1.6, cam.view_proj(1.6), cam.rel_proj(1.6));
             let _ = aspect;
@@ -471,7 +489,7 @@ mod tests {
 
     #[test]
     fn tilt_keeps_target_at_screen_centre() {
-        let cam = Camera { lon: 0.4, lat: 0.5, alt: 0.05, pitch: 0.9, heading: 0.7 };
+        let cam = Camera { lon: 0.4, lat: 0.5, alt: 0.05, pitch: 0.9, heading: 0.7, shift: [0.0, 0.0] };
         let s = cam.project(cam.dir(), 1000.0, 600.0).unwrap();
         assert!((s[0] - 500.0).abs() < 1e-6 && (s[1] - 300.0).abs() < 1e-6, "{s:?}");
         let (lon, lat) = cam.pick(500.0, 300.0, 1000.0, 600.0).unwrap();
@@ -480,7 +498,7 @@ mod tests {
 
     #[test]
     fn projector_matches_camera_project() {
-        let cam = Camera { lon: 0.3, lat: 0.6, alt: 0.02, pitch: 0.8, heading: -1.1 };
+        let cam = Camera { lon: 0.3, lat: 0.6, alt: 0.02, pitch: 0.8, heading: -1.1, shift: [0.0, 0.0] };
         let pr = cam.projector(1000.0, 700.0);
         let p = lonlat_to_vec(0.301, 0.6005);
         let a = cam.project(p, 1000.0, 700.0).unwrap();
@@ -493,7 +511,7 @@ mod tests {
     #[test]
     fn heading_rotates_the_view() {
         // Facing east: east is up the screen, north is to the left.
-        let cam = Camera { lon: 0.0, lat: 0.0, alt: 0.5, pitch: 0.0, heading: std::f64::consts::FRAC_PI_2 };
+        let cam = Camera { lon: 0.0, lat: 0.0, alt: 0.5, pitch: 0.0, heading: std::f64::consts::FRAC_PI_2, shift: [0.0, 0.0] };
         let c = cam.project(lonlat_to_vec(0.0, 0.0), 800.0, 800.0).unwrap();
         let e = cam.project(lonlat_to_vec(0.05, 0.0), 800.0, 800.0).unwrap();
         let n = cam.project(lonlat_to_vec(0.0, 0.05), 800.0, 800.0).unwrap();
@@ -505,12 +523,41 @@ mod tests {
     fn rotated_pan_moves_content_with_cursor() {
         let (w, h) = (1000.0, 800.0);
         for &heading in &[0.0, 0.9, -2.0, 3.0] {
-            let mut cam = Camera { lon: 0.2, lat: 0.4, alt: 0.01, pitch: 0.0, heading };
+            let mut cam = Camera { lon: 0.2, lat: 0.4, alt: 0.01, pitch: 0.0, heading, shift: [0.0, 0.0] };
             let p = lonlat_to_vec(0.2005, 0.4003);
             let before = cam.project(p, w, h).unwrap();
             cam.pan(40.0, -25.0, h);
             let after = cam.project(p, w, h).unwrap();
             assert!((after[0] - before[0] - 40.0).abs() < 0.5 && (after[1] - before[1] + 25.0).abs() < 0.5, "{heading}: {before:?} {after:?}");
         }
+    }
+
+    #[test]
+    fn shift_moves_the_target_on_screen_and_everything_stays_consistent() {
+        let mut cam = Camera::from_degrees(-100.0, 30.0, 0.6);
+        cam.pitch = 0.4;
+        cam.heading = 0.7;
+        cam.shift_by(-150.0, 90.0, 1000.0, 800.0);
+        let (w, h) = (1000.0, 800.0);
+        // the target is no longer at the centre, and moved the way the cursor did
+        let s = cam.project(cam.dir(), w, h).unwrap();
+        assert!(close(s[0], 500.0 - 150.0, 1e-6) && close(s[1], 400.0 + 90.0, 1e-6), "{s:?}");
+        // pick inverts project
+        let (lon, lat) = (-97.0f64.to_radians(), 31.0f64.to_radians());
+        let sp = cam.project(lonlat_to_vec(lon, lat), w, h).unwrap();
+        let (plon, plat) = cam.pick(sp[0], sp[1], w, h).unwrap();
+        assert!(close(plon, lon, 1e-9) && close(plat, lat, 1e-9));
+        // the matrices agree with project
+        let m = cam.view_proj(w / h);
+        let p = lonlat_to_vec(lon, lat);
+        let clip: Vec<f64> = (0..4).map(|r| m[r][0] * p[0] + m[r][1] * p[1] + m[r][2] * p[2] + m[r][3]).collect();
+        assert!(close((clip[0] / clip[3] * 0.5 + 0.5) * w, sp[0], 1e-6) && close((0.5 - clip[1] / clip[3] * 0.5) * h, sp[1], 1e-6));
+        // so does the projector
+        let q = cam.projector(w, h).project(p).unwrap();
+        assert!(close(q[0], sp[0], 1e-9) && close(q[1], sp[1], 1e-9));
+        // reset puts it back in the middle
+        cam.reset_orientation();
+        let s = cam.project(cam.dir(), w, h).unwrap();
+        assert!(close(s[0], 500.0, 1e-6) && close(s[1], 400.0, 1e-6));
     }
 }

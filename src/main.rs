@@ -152,6 +152,10 @@ struct App {
     route_color: [u8; 3],
     route_alpha: f32,
     route_width: f32,
+    route_at_altitude: bool,
+    transit_focus: bool,
+    map_dim: f32,
+    flat_stations: bool,
 }
 
 /// How route lines are drawn (adjustable in the Flights section).
@@ -159,6 +163,9 @@ struct RouteStyle {
     color: [u8; 3],
     alpha: f32,
     width: f32,
+    /// Draw the line at the plane's altitude instead of on the ground.
+    at_altitude: bool,
+    exaggeration: f64,
 }
 
 impl App {
@@ -230,6 +237,10 @@ impl App {
             route_color: [40, 120, 255],
             route_alpha: 0.55,
             route_width: 3.0,
+            route_at_altitude: true,
+            transit_focus: true,
+            map_dim: 0.5,
+            flat_stations: true,
         }
     }
 
@@ -264,7 +275,7 @@ impl App {
         let (lon, lat) = vec_lon_lat(st.ground);
         let len = p.def.length_m * self.plane_size / flight::EARTH_RADIUS_M;
         let height = st.alt_m * self.exaggeration / flight::EARTH_RADIUS_M;
-        let mut to = Camera { lon, lat, alt: (8.0 * len).max(3.0 * height), pitch: 0.9, heading: self.cam.heading };
+        let mut to = Camera { lon, lat, alt: (8.0 * len).max(3.0 * height), pitch: 0.9, heading: self.cam.heading, shift: [0.0, 0.0] };
         to.normalize();
         self.fly_to(to, now, 1.6);
     }
@@ -284,6 +295,7 @@ impl App {
             alt: ln_alt.exp(),
             pitch: f.from.pitch + (f.to.pitch - f.from.pitch) * e,
             heading: f.from.heading + camera::wrap_pi(f.to.heading - f.from.heading) * e,
+            shift: [f.from.shift[0] + (f.to.shift[0] - f.from.shift[0]) * e, f.from.shift[1] + (f.to.shift[1] - f.from.shift[1]) * e],
         };
         self.cam.normalize();
         if t >= 1.0 {
@@ -331,7 +343,7 @@ impl App {
                         if self.stats.failed > 0 { format!(", {} retrying", self.stats.failed) } else { String::new() }
                     )));
                     ui.label(t(format!("GPU: {}", self.gpu_name)));
-                    ui.small("left-drag: move   right- or middle-drag: tilt (up/down) + rotate (left/right)   wheel: zoom   double-click: zoom in   R: reset view");
+                    ui.small("left-drag: move   Shift/Ctrl+drag: slide the globe on screen   right/middle-drag: tilt + rotate   wheel: zoom   double-click: zoom in   R: reset");
 
                     egui::CollapsingHeader::new("View").default_open(true).show(ui, |ui| {
                         let mut tilt = self.cam.pitch.to_degrees();
@@ -407,6 +419,11 @@ impl App {
                                 self.fonts.apply(ctx);
                             }
                         });
+                        ui.checkbox(&mut self.transit_focus, "Transit focus: only subway labels, dimmed map");
+                        if self.transit_focus {
+                            ui.add(egui::Slider::new(&mut self.map_dim, 0.0..=0.85).text("Dim"));
+                        }
+                        ui.checkbox(&mut self.flat_stations, "Station circles lie flat when tilted");
                         ui.small("Styles are colour recreations of well-known OpenStreetMap looks on the same vector data.");
                     });
 
@@ -468,6 +485,7 @@ impl App {
                         });
                         ui.add(egui::Slider::new(&mut self.route_alpha, 0.1..=1.0).text("Opacity"));
                         ui.add(egui::Slider::new(&mut self.route_width, 1.0..=10.0).text("Width"));
+                        ui.checkbox(&mut self.route_at_altitude, "Route line at plane altitude");
                         if !self.model_errors.is_empty() {
                             ui.colored_label(egui::Color32::LIGHT_RED, "Some aircraft models were not found:");
                             for e in &self.model_errors {
@@ -638,8 +656,13 @@ impl eframe::App for App {
             if d != egui::Vec2::ZERO {
                 if resp.dragged_by(egui::PointerButton::Primary) {
                     self.fly = None;
-                    self.follow = None;
-                    self.cam.pan(d.x as f64, d.y as f64, h);
+                    if ctx.input(|i| i.modifiers.shift || i.modifiers.ctrl) {
+                        // Shift/Ctrl + drag: slide the whole globe around the window.
+                        self.cam.shift_by(d.x as f64, d.y as f64, w, h);
+                    } else {
+                        self.follow = None;
+                        self.cam.pan(d.x as f64, d.y as f64, h);
+                    }
                 } else if resp.dragged_by(egui::PointerButton::Secondary) || resp.dragged_by(egui::PointerButton::Middle) {
                     self.fly = None;
                     self.cam.orbit(d.x as f64, d.y as f64);
@@ -708,10 +731,22 @@ impl eframe::App for App {
             // --- overlays (egui), bottom to top: routes, transit, plane drop lines ---
             let pr = self.cam.projector(w, h);
             let mut extras: Vec<Cand> = Vec::new();
-            let rs = RouteStyle { color: self.route_color, alpha: self.route_alpha, width: self.route_width };
-            draw_routes(&painter, rect, &pr, &self.planes, &rs, &mut extras);
+            let rs = RouteStyle {
+                color: self.route_color,
+                alpha: self.route_alpha,
+                width: self.route_width,
+                at_altitude: self.route_at_altitude,
+                exaggeration: self.exaggeration,
+            };
             let systems = self.transit.visible();
-            for l in transit::draw(&painter, rect, &self.cam, zf, &systems) {
+            // With a transit map in view the base map steps back: dimmed, and its labels hidden.
+            let focus = if self.transit_focus { transit::focus(&self.cam, zf, w / h, &systems) } else { 0.0 };
+            if focus > 0.01 && self.map_dim > 0.0 {
+                let a = (focus * self.map_dim * 255.0).round() as u8;
+                painter.rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(12, 14, 22, a));
+            }
+            draw_routes(&painter, rect, &pr, &self.planes, &rs, &mut extras);
+            for l in transit::draw(&painter, rect, &self.cam, zf, &systems, self.flat_stations) {
                 extras.push(Cand::from_station(l));
             }
             transit::draw_markers(&painter, rect, &self.cam, zf, &self.transit.markers());
@@ -740,10 +775,11 @@ impl eframe::App for App {
             // --- labels ---
             if self.show_labels {
                 let ls = LabelStyle { scale: LABEL_SIZES[self.label_size].1, bold: self.label_bold, dark: self.palette.dark(), family: fonts::Fonts::family() };
-                draw_labels(&painter, rect, &pr, zf, &frame_tiles.labels, extras, &ls);
+                let map_labels = if focus > 0.5 { &frame_tiles.labels[..0] } else { &frame_tiles.labels[..] };
+                draw_labels(&painter, rect, &pr, zf, map_labels, extras, &ls);
             }
 
-            // --- attribution (required by the data and model licences) ---
+            // --- attribution (required by the map data licences) ---
             egui::Area::new(egui::Id::new("attribution")).anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(8.0, -8.0)).show(ctx, |ui| {
                 egui::Frame::new()
                     .fill(egui::Color32::from_black_alpha(170))
@@ -757,21 +793,6 @@ impl eframe::App for App {
                             ui.hyperlink_to("© OpenMapTiles", "https://openmaptiles.org/");
                             ui.label("Data from");
                             ui.hyperlink_to("OpenStreetMap", "https://www.openstreetmap.org/copyright");
-                            ui.label("· Models (CC-BY-4.0): 737 by");
-                            ui.hyperlink_to(
-                                "A Random Modeler",
-                                "https://sketchfab.com/3d-models/southwest-airlines-boeing-737-73d0cd0c03594c5d9c53235d74b429bf",
-                            );
-                            ui.label("A380 by");
-                            ui.hyperlink_to(
-                                "Nobilis 2",
-                                "https://sketchfab.com/3d-models/airbus-a380-841-lufthansa-edbffac71f88480c82f5690b777e7416",
-                            );
-                            ui.label("787 by");
-                            ui.hyperlink_to(
-                                "themaker845",
-                                "https://sketchfab.com/3d-models/boeing-787-dreamliner-524f485c748146b7968e0dd8eb84e786",
-                            );
                         });
                     });
             });
@@ -801,7 +822,8 @@ fn draw_routes(painter: &egui::Painter, rect: egui::Rect, pr: &Projector, planes
     for p in planes.iter().filter(|p| p.show) {
         let mut run: Vec<egui::Pos2> = Vec::new();
         let mut runs: Vec<Vec<egui::Pos2>> = Vec::new();
-        for v in p.route.polyline(360) {
+        let line = if rs.at_altitude { p.route.polyline_alt(360, rs.exaggeration) } else { p.route.polyline(360) };
+        for v in line {
             match to_screen(pr, rect, v) {
                 Some(s) => run.push(s),
                 None => {

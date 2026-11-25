@@ -10,6 +10,7 @@ Rust + [egui](https://github.com/emilk/egui) + [wgpu](https://wgpu.rs). Map data
 | Action | Effect |
 | --- | --- |
 | Left-drag | Move (pan) the map |
+| Shift- or Ctrl-drag | Slide the whole globe/map around the window (without changing what is in the middle); **R** puts it back |
 | Right-drag or middle-drag | Up/down: tilt (3D perspective). Left/right: rotate around the point in the middle |
 | Mouse wheel / pinch | Zoom toward the cursor (down to street level, about zoom 19) |
 | Double-click | Fly in on that spot |
@@ -27,12 +28,12 @@ for the discrete / high-performance GPU first.
 
 ## Map styles and labels
 
-16 styles: OSM Standard, OSM Bright, OpenFreeMap Liberty, Positron (light), Dark Matter, Voyager, OSM Humanitarian,
-OpenTopoMap, CyclOSM, OSM Transport, Stamen Terrain, Stamen Toner, Monochrome, Vintage, Midnight and Blueprint. These are
+18 styles: OSM Standard, OSM Bright, OpenFreeMap Liberty, Positron (light), Dark Matter, Voyager, OSM Humanitarian,
+OpenTopoMap, CyclOSM, OSM Transport, Stamen Terrain, Stamen Toner, Monochrome, Vintage, Midnight, Blueprint, and two Google-Maps-inspired looks, *Maps Light* and *Maps Night*. These are
 **colour recreations** of those looks on the one vector data set the app uses (OpenFreeMap). The real styles also differ in
 which features they draw, symbols, hillshading and so on, which a recreation cannot copy; dark styles switch to light
-labels. Labels can be hidden, set to Small / Medium / Large / X-large, and made bolder (no bold font is bundled, so bold
-is drawn by thickening the strokes).
+labels. **Transit focus** (on by default) dims the base map and hides its labels while a subway map is showing, leaving only the subway labels; the dimming is adjustable. Labels can be hidden, set to Small / Medium / Large / X-large, and made bolder (no bold font is bundled, so bold
+is drawn by thickening the strokes). The label font is picked from the fonts installed on the computer (Segoe UI on Windows by default; change it under *Map style & labels*), with a Japanese/Chinese/Korean system font as fallback.
 
 ## Offline data folder
 
@@ -58,7 +59,7 @@ MTR, Singapore MRT & LRT, Mexico City, Madrid, Berlin U-Bahn, Cairo and São Pau
 relations from OpenStreetMap) but are drawn like a subway map: thick colour-coded lines with a white outline and lettered
 roundels at the line ends, with official colours where they are known (London, New York, Paris, Tokyo, LA, Muni) and the
 colour in the OpenStreetMap data elsewhere. Zoomed out, each city whose map is saved in the data folder (those are switched on at start-up) shows a blue **metro symbol**; as you zoom in to city level the symbol fades out while the slim lines fade in, and they get thicker the closer you get. **Station circles and
-names only appear once there is room for them**: a circle needs about 18 px to its nearest neighbour, a name about 56 px.
+names only appear once there is room for them**: a circle needs about 18 px to its nearest neighbour, a name about 56 px. When the view is tilted the station circles can lie flat on the ground (an option).
 
 Systems are plain entries in `src/transit_data.rs` (bounding box, OSM filters, standard line colours), so adding another
 city is one more entry. `rustymaps.exe --fetch-transit <folder> [system ids]` downloads maps by hand.
@@ -69,7 +70,7 @@ Three aircraft shuttle between their airports until you pause them: a Southwest 
 Lufthansa A380 between San Francisco and Frankfurt, and an ANA 787 Dreamliner between San Francisco and Tokyo Haneda. Each
 has its own play/pause, progress slider, **Look at** and **Follow**. At the far end an aircraft waits about six seconds,
 turns around and flies back. Shared sliders set the speed (real time to 3600x), the **model size** (1x to 20,000x) and the
-**altitude exaggeration** (1x to 150x; the true height is shown in feet). Route lines are blue and semi-transparent by default; colour, opacity and width are adjustable. A drop line and a dot mark the spot on the ground
+**altitude exaggeration** (1x to 150x; the true height is shown in feet). Planes start switched off, and a route line is only drawn for a plane that is switched on. Route lines are blue and semi-transparent by default, and can run at the plane's altitude (so the line passes through the model) or along the ground; colour, opacity and width are adjustable. A drop line and a dot mark the spot on the ground
 below each aircraft, and the aircraft are always drawn above the route lines and station markers.
 
 ## How it works
@@ -107,16 +108,12 @@ cargo run --release
 
 GitHub Actions (`.github/workflows/build.yml`) builds a Windows release on every push and uploads
 `rustymaps<YYMMDDHHMM>.zip` (just the program) as an artifact; `.github/workflows/data.yml` (run by hand) builds
-`rustymaps-data<YYMMDDHHMM>.zip` with the data folder. Aircraft are baked from Sketchfab glTF files with `tools/bake_plane.py`. Linux and macOS use the same code; they just are not in CI yet.
+`rustymaps-data<YYMMDDHHMM>.zip` with the data folder. The low-poly aircraft are generated by `tools/make_lowpoly.py <out-dir>` (`tools/bake_plane.py` still converts any glTF). Linux and macOS use the same code; they just are not in CI yet.
 `Cargo.lock` is not committed yet; the first CI build creates it.
 
 ## Credits
 
 Map data © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, tiles by [OpenFreeMap](https://openfreemap.org)
-(© [OpenMapTiles](https://openmaptiles.org/)). Aircraft models from Sketchfab, all CC-BY-4.0:
-[Southwest Airlines Boeing 737](https://sketchfab.com/3d-models/southwest-airlines-boeing-737-73d0cd0c03594c5d9c53235d74b429bf) by A Random Modeler,
-[Airbus A380-841 Lufthansa](https://sketchfab.com/3d-models/airbus-a380-841-lufthansa-edbffac71f88480c82f5690b777e7416) by Nobilis 2,
-[Boeing-787- Dreamliner](https://sketchfab.com/3d-models/boeing-787-dreamliner-524f485c748146b7968e0dd8eb84e786) by themaker845
-(see `assets/models/CREDITS.txt`; the baked files are adaptations).
+(© [OpenMapTiles](https://openmaptiles.org/)). The aircraft are simple low-poly models generated by `tools/make_lowpoly.py` (nothing to credit).
 
 Please keep the on-screen attribution in place.
