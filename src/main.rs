@@ -162,6 +162,8 @@ struct App {
     show_trains: bool,
     /// Frame rate of animations (planes, trains) when nothing else is happening.
     anim_fps: u32,
+    /// Time of the previous frame, for advancing the flights by real elapsed time.
+    last_anim: f64,
     /// Index into `ui::UI_SIZES`.
     ui_size: usize,
     /// 0 = smooth (supersampled) plane edges, 1 = fast.
@@ -263,6 +265,7 @@ impl App {
             flat_stations: true,
             show_trains: true,
             anim_fps: 60,
+            last_anim: 0.0,
             ui_size: 1,
             plane_quality: 0,
             tab: None,
@@ -422,6 +425,29 @@ fn vec_lon_lat(p: V3) -> (f64, f64) {
     camera::vec_to_lonlat(p)
 }
 
+/// Size of a rectangle in physical pixels, rounded the way egui rounds its paint-callback viewport.
+fn rect_px(rect: egui::Rect, ppp: f32) -> [u32; 2] {
+    let w = (rect.max.x * ppp).round() - (rect.min.x * ppp).round();
+    let h = (rect.max.y * ppp).round() - (rect.min.y * ppp).round();
+    [w.max(1.0) as u32, h.max(1.0) as u32]
+}
+
+/// How long a moving plane can wait before redrawing: until it has crossed about a pixel
+/// (a real-time flight in a wide view barely moves, so it needs very few frames).
+fn plane_redraw_interval(p: &Plane, pr: &camera::Projector, speed: f64, min_s: f64) -> f64 {
+    const PROBE_S: f64 = 0.25;
+    let now = p.sim.state(&p.route);
+    let mut later = p.sim;
+    later.advance(PROBE_S, speed, p.route.duration_s());
+    let later = later.state(&p.route);
+    let (Some(a), Some(b)) = (pr.project(now.ground), pr.project(later.ground))
+    else {
+        return 0.25;
+    };
+    let px_per_s = ((a[0] - b[0]).hypot(a[1] - b[1]) / PROBE_S).max(1e-3);
+    (1.0 / px_per_s).max(min_s).min(0.25)
+}
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let now = ctx.input(|i| i.time);
@@ -433,18 +459,18 @@ impl eframe::App for App {
         self.search.poll();
 
         let speed = SPEEDS[self.speed].1;
-        let mut animating = false;
-        // Only planes that are switched on count: a hidden plane must not keep the whole map
-        // re-rendering. Animation is paced (not "as fast as the screen refreshes") to spare the GPU.
+        // Flights advance by the real time since the previous frame, however far apart frames are.
+        let anim_dt = if self.last_anim > 0.0 { (now - self.last_anim).clamp(0.0, 0.5) } else { 0.0 };
+        self.last_anim = now;
+        // The fastest the animation may redraw (the "animation rate" setting); trains never need more than 30.
         let frame = std::time::Duration::from_millis(1000 / self.anim_fps.max(1) as u64);
+        let train_frame = frame.max(std::time::Duration::from_millis(33));
+        // Only planes that are switched on count: a hidden plane must not keep the screen redrawing.
+        // How often they redraw is decided below, from how far they actually move on screen.
         for p in &mut self.planes {
             if p.show && p.sim.playing {
-                p.sim.advance(dt.min(0.1), speed, p.route.duration_s());
-                animating = true;
+                p.sim.advance(anim_dt, speed, p.route.duration_s());
             }
-        }
-        if animating {
-            ctx.request_repaint_after(frame);
         }
         if self.step_fly(now) {
             ctx.request_repaint();
@@ -553,6 +579,7 @@ impl eframe::App for App {
                     globals,
                     cam_merc: camera::lonlat_to_merc(self.cam.lon, self.cam.lat),
                     draw: frame_tiles.draw.clone(),
+                    viewport_px: rect_px(rect, ppp),
                 },
             ));
 
@@ -594,7 +621,7 @@ impl eframe::App for App {
                 transit::draw(&painter, rect, &self.cam, zf, &systems, &opts)
             };
             if out.animating {
-                ctx.request_repaint_after(frame);
+                ctx.request_repaint_after(train_frame);
             }
             let line_hit = out.hit;
             for l in out.labels {
@@ -612,25 +639,43 @@ impl eframe::App for App {
                 self.selected_line = line_hit;
             }
             let mut draws: Vec<PlaneDraw> = Vec::new();
+            let mut bounds: Option<[f32; 4]> = None; // screen box around all planes (NDC)
+            let mut whole_screen = false;
+            let mut wait = 0.25_f64; // seconds until the planes next need a redraw
             for (i, p) in self.planes.iter().enumerate() {
                 let (true, Some(radius)) = (p.show, p.radius_m) else { continue };
                 let st = p.sim.state(&p.route);
                 draw_plane_marker(&painter, rect, &self.cam, &pr, &st, p.def, self.plane_size, self.exaggeration);
+                if p.sim.playing {
+                    wait = wait.min(plane_redraw_interval(p, &pr, speed, frame.as_secs_f64()));
+                }
                 if let Some((mvp, nrm)) = flight::plane_matrices(&self.cam, w / h, &st, self.plane_size, self.exaggeration, radius) {
+                    match flight::ndc_bounds(&mvp, radius) {
+                        Some(b) => {
+                            bounds = Some(match bounds {
+                                Some(a) => [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])],
+                                None => b,
+                            })
+                        }
+                        None => whole_screen = true,
+                    }
                     draws.push(PlaneDraw { model: i, mvp, nrm });
                 }
             }
+            if self.planes.iter().any(|p| p.show && p.sim.playing) {
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait.max(frame.as_secs_f64())));
+            }
 
             // --- the aircraft themselves: above the routes and station markers, below the labels ---
-            if !draws.is_empty() {
+            // Only the part of the screen that holds a plane is rendered and composited.
+            let vp = rect_px(rect, ppp);
+            if let Some(bbox) = flight::plane_box(bounds, whole_screen, vp) {
+                for d in &mut draws {
+                    flight::remap_to_box(&mut d.mvp, vp, bbox);
+                }
                 painter.add(egui_wgpu::Callback::new_paint_callback(
                     rect,
-                    PlaneCallback {
-                        draws,
-                        srgb: self.srgb,
-                        viewport_px: [(w as f32 * ppp) as u32, (h as f32 * ppp) as u32],
-                        supersample: self.plane_quality == 0,
-                    },
+                    PlaneCallback { draws, srgb: self.srgb, bbox, supersample: self.plane_quality == 0 },
                 ));
             }
 

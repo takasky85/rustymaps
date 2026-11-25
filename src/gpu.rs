@@ -66,6 +66,22 @@ pub struct MapGpu {
     base_ib: wgpu::Buffer,
     base_icount: u32,
     tiles: HashMap<TileId, TileGpu>,
+    /// Bumped whenever a tile is added or removed (part of the cache key).
+    generation: u64,
+    format: wgpu::TextureFormat,
+    blit: wgpu::RenderPipeline,
+    blit_bgl: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    /// The map as last rendered; it is only redrawn when `key` changes.
+    cache: Option<Cache>,
+    key: Vec<u8>,
+    key_draw: Vec<TileId>,
+}
+
+struct Cache {
+    size: (u32, u32),
+    view: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
 }
 
 /// A coarse lat/lon sphere in the land colour, painted under all tile data.
@@ -234,6 +250,69 @@ impl MapGpu {
             usage: wgpu::BufferUsages::INDEX,
         });
 
+        // Cached-image blit.
+        let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("map blit shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("blit.wgsl").into()),
+        });
+        let blit_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("map blit bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let blit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("map blit layout"),
+            bind_group_layouts: &[&blit_bgl],
+            push_constant_ranges: &[],
+        });
+        let blit = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("map blit"),
+            layout: Some(&blit_layout),
+            vertex: wgpu::VertexState {
+                module: &blit_shader,
+                entry_point: Some("vs_blit"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &blit_shader,
+                entry_point: Some("fs_blit"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("map blit sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
         MapGpu {
             base_pipeline,
             fill_pipeline,
@@ -245,6 +324,14 @@ impl MapGpu {
             base_ib,
             base_icount: indices.len() as u32,
             tiles: HashMap::new(),
+            generation: 0,
+            format: target_format,
+            blit,
+            blit_bgl,
+            sampler,
+            cache: None,
+            key: Vec::new(),
+            key_draw: Vec::new(),
         }
     }
 
@@ -276,6 +363,7 @@ impl MapGpu {
                 usage: wgpu::BufferUsages::VERTEX,
             })
         });
+        self.generation += 1;
         self.tiles.insert(
             id,
             TileGpu {
@@ -292,43 +380,152 @@ impl MapGpu {
     }
 
     pub fn remove_tile(&mut self, id: &TileId) {
-        self.tiles.remove(id);
+        if self.tiles.remove(id).is_some() {
+            self.generation += 1;
+        }
+    }
+
+    fn make_cache(&self, device: &wgpu::Device, size: (u32, u32)) -> Cache {
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("map cache"),
+            size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("map cache bg"),
+            layout: &self.blit_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+            ],
+        });
+        Cache { size, view, bind_group }
     }
 }
 
 /// One frame's worth of drawing: camera uniforms plus the tiles to draw,
 /// ordered from lowest zoom to highest so detailed tiles paint over coarse ones.
+///
+/// The map is drawn into an offscreen image that is kept between frames: when only the overlays
+/// or the planes change (trains, aircraft, UI), the GPU just copies that image instead of
+/// re-drawing every tile.
 pub struct MapCallback {
     pub globals: Globals,
     /// Camera position in normalized mercator (0..1), full f64 precision.
     pub cam_merc: (f64, f64),
     pub draw: Vec<TileId>,
+    /// Size of the map rectangle in physical pixels.
+    pub viewport_px: [u32; 2],
+}
+
+impl MapCallback {
+    /// Everything that changes the picture, as bytes.
+    fn key(&self, generation: u64) -> Vec<u8> {
+        let mut k = Vec::with_capacity(std::mem::size_of::<Globals>() + 40);
+        k.extend_from_slice(as_bytes(std::slice::from_ref(&self.globals)));
+        k.extend_from_slice(&self.cam_merc.0.to_le_bytes());
+        k.extend_from_slice(&self.cam_merc.1.to_le_bytes());
+        k.extend_from_slice(&generation.to_le_bytes());
+        k.extend_from_slice(&self.viewport_px[0].to_le_bytes());
+        k.extend_from_slice(&self.viewport_px[1].to_le_bytes());
+        k
+    }
 }
 
 impl egui_wgpu::CallbackTrait for MapCallback {
     fn prepare(
         &self,
-        _device: &wgpu::Device,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         _screen_descriptor: &egui_wgpu::ScreenDescriptor,
-        _egui_encoder: &mut wgpu::CommandEncoder,
+        egui_encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        if let Some(gpu) = callback_resources.get_mut::<MapGpu>() {
-            queue.write_buffer(&gpu.globals_buf, 0, as_bytes(std::slice::from_ref(&self.globals)));
-            // Tile origin minus camera, subtracted in f64 so the f32 result is tiny and exact
-            // however far we zoom in.
-            let (cx, cy) = self.cam_merc;
-            for id in &self.draw {
-                if let Some(t) = gpu.tiles.get(id) {
-                    let mut dx = t.origin.0 - cx;
-                    dx -= dx.round(); // shortest way around the antimeridian
-                    let dy = t.origin.1 - cy;
-                    let data: [f32; 4] = [dx as f32, dy as f32, t.unit as f32, 0.0];
-                    queue.write_buffer(&t.uniform, 0, as_bytes(&data));
+        let Some(gpu) = callback_resources.get_mut::<MapGpu>() else {
+            return Vec::new();
+        };
+        let limit = device.limits().max_texture_dimension_2d;
+        let size = (self.viewport_px[0].clamp(1, limit), self.viewport_px[1].clamp(1, limit));
+        let size_changed = gpu.cache.as_ref().map_or(true, |c| c.size != size);
+        if size_changed {
+            gpu.cache = Some(gpu.make_cache(device, size));
+        }
+        let key = self.key(gpu.generation);
+        if !size_changed && key == gpu.key && self.draw == gpu.key_draw {
+            return Vec::new(); // nothing moved: reuse the picture from last time
+        }
+        gpu.key = key;
+        gpu.key_draw.clear();
+        gpu.key_draw.extend_from_slice(&self.draw);
+
+        queue.write_buffer(&gpu.globals_buf, 0, as_bytes(std::slice::from_ref(&self.globals)));
+        // Tile origin minus camera, subtracted in f64 so the f32 result is tiny and exact
+        // however far we zoom in.
+        let (cx, cy) = self.cam_merc;
+        for id in &self.draw {
+            if let Some(t) = gpu.tiles.get(id) {
+                let mut dx = t.origin.0 - cx;
+                dx -= dx.round(); // shortest way around the antimeridian
+                let dy = t.origin.1 - cy;
+                let data: [f32; 4] = [dx as f32, dy as f32, t.unit as f32, 0.0];
+                queue.write_buffer(&t.uniform, 0, as_bytes(&data));
+            }
+        }
+
+        let Some(cache) = gpu.cache.as_ref() else {
+            return Vec::new();
+        };
+        let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("map pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &cache.view,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        // 1. Land-coloured planet.
+        pass.set_pipeline(&gpu.base_pipeline);
+        pass.set_bind_group(0, &gpu.globals_bg, &[]);
+        pass.set_vertex_buffer(0, gpu.base_vb.slice(..));
+        pass.set_index_buffer(gpu.base_ib.slice(..), wgpu::IndexFormat::Uint32);
+        pass.draw_indexed(0..gpu.base_icount, 0, 0..1);
+
+        // 2. All polygon fills (coarse tiles first).
+        pass.set_pipeline(&gpu.fill_pipeline);
+        pass.set_bind_group(0, &gpu.globals_bg, &[]);
+        for id in &self.draw {
+            if let Some(t) = gpu.tiles.get(id) {
+                if let Some(vb) = &t.fill {
+                    pass.set_bind_group(1, &t.bind_group, &[]);
+                    pass.set_vertex_buffer(0, vb.slice(..));
+                    pass.draw(0..t.fill_count, 0..1);
                 }
             }
         }
+
+        // 3. All lines on top.
+        pass.set_pipeline(&gpu.line_pipeline);
+        pass.set_bind_group(0, &gpu.globals_bg, &[]);
+        for id in &self.draw {
+            if let Some(t) = gpu.tiles.get(id) {
+                if let Some(vb) = &t.line {
+                    pass.set_bind_group(1, &t.bind_group, &[]);
+                    pass.set_vertex_buffer(0, vb.slice(..));
+                    pass.draw(0..6, 0..t.line_count);
+                }
+            }
+        }
+        drop(pass);
         Vec::new()
     }
 
@@ -341,38 +538,10 @@ impl egui_wgpu::CallbackTrait for MapCallback {
         let Some(gpu) = callback_resources.get::<MapGpu>() else {
             return;
         };
-
-        // 1. Land-coloured planet.
-        render_pass.set_pipeline(&gpu.base_pipeline);
-        render_pass.set_bind_group(0, &gpu.globals_bg, &[]);
-        render_pass.set_vertex_buffer(0, gpu.base_vb.slice(..));
-        render_pass.set_index_buffer(gpu.base_ib.slice(..), wgpu::IndexFormat::Uint32);
-        render_pass.draw_indexed(0..gpu.base_icount, 0, 0..1);
-
-        // 2. All polygon fills (coarse tiles first).
-        render_pass.set_pipeline(&gpu.fill_pipeline);
-        render_pass.set_bind_group(0, &gpu.globals_bg, &[]);
-        for id in &self.draw {
-            if let Some(t) = gpu.tiles.get(id) {
-                if let Some(vb) = &t.fill {
-                    render_pass.set_bind_group(1, &t.bind_group, &[]);
-                    render_pass.set_vertex_buffer(0, vb.slice(..));
-                    render_pass.draw(0..t.fill_count, 0..1);
-                }
-            }
-        }
-
-        // 3. All lines on top.
-        render_pass.set_pipeline(&gpu.line_pipeline);
-        render_pass.set_bind_group(0, &gpu.globals_bg, &[]);
-        for id in &self.draw {
-            if let Some(t) = gpu.tiles.get(id) {
-                if let Some(vb) = &t.line {
-                    render_pass.set_bind_group(1, &t.bind_group, &[]);
-                    render_pass.set_vertex_buffer(0, vb.slice(..));
-                    render_pass.draw(0..6, 0..t.line_count);
-                }
-            }
+        if let Some(cache) = &gpu.cache {
+            render_pass.set_pipeline(&gpu.blit);
+            render_pass.set_bind_group(0, &cache.bind_group, &[]);
+            render_pass.draw(0..3, 0..1);
         }
     }
 }

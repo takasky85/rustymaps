@@ -320,6 +320,65 @@ pub fn plane_matrices(
     Some((crate::camera::cols_f32(&mvp), crate::camera::cols_f32(&nrm)))
 }
 
+/// Screen box (NDC: min x, min y, max x, max y) around a plane's model, from its `mvp` and its
+/// bounding radius in metres. `None` when part of the model reaches the camera plane, in which
+/// case the caller should assume the whole screen.
+pub fn ndc_bounds(mvp: &[f32; 16], radius_m: f64) -> Option<[f32; 4]> {
+    let r = radius_m as f32;
+    let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+    for k in 0..8 {
+        let p = [
+            if k & 1 == 0 { -r } else { r },
+            if k & 2 == 0 { -r } else { r },
+            if k & 4 == 0 { -r } else { r },
+        ];
+        let c = |row: usize| mvp[row] * p[0] + mvp[4 + row] * p[1] + mvp[8 + row] * p[2] + mvp[12 + row];
+        let w = c(3);
+        if w <= 1e-30 {
+            return None;
+        }
+        let (x, y) = (c(0) / w, c(1) / w);
+        b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+    }
+    Some(b)
+}
+
+/// The pixel box (x, y, w, h inside the map rectangle of `vp` pixels) to render the planes in,
+/// or `None` when they are all off screen. Sizes are rounded up to multiples of 128 so the
+/// offscreen image is not re-created every frame as a plane moves.
+pub fn plane_box(bounds: Option<[f32; 4]>, whole_screen: bool, vp: [u32; 2]) -> Option<[u32; 4]> {
+    let (w, h) = (vp[0] as f32, vp[1] as f32);
+    let b = if whole_screen { [-1.0, -1.0, 1.0, 1.0] } else { bounds? };
+    // pixel box with a little margin; y runs downwards
+    let m = 3.0;
+    let x0 = ((b[0] + 1.0) * 0.5 * w - m).floor().max(0.0);
+    let x1 = ((b[2] + 1.0) * 0.5 * w + m).ceil().min(w);
+    let y0 = ((1.0 - b[3]) * 0.5 * h - m).floor().max(0.0);
+    let y1 = ((1.0 - b[1]) * 0.5 * h + m).ceil().min(h);
+    if !(x1 > x0 && y1 > y0) {
+        return None;
+    }
+    let q = |len: f32, total: f32| ((len / 128.0).ceil() * 128.0).min(total);
+    let (bw, bh) = (q(x1 - x0, w), q(y1 - y0, h));
+    let bx = x0.min(w - bw);
+    let by = y0.min(h - bh);
+    Some([bx as u32, by as u32, bw as u32, bh as u32])
+}
+
+/// Rewrites a column-major matrix so that clip space covers just `bbox` (pixels inside the
+/// `vp`-sized map) instead of the whole map.
+pub fn remap_to_box(mvp: &mut [f32; 16], vp: [u32; 2], bbox: [u32; 4]) {
+    let (w, h) = (vp[0] as f32, vp[1] as f32);
+    let [bx, by, bw, bh] = bbox.map(|v| v as f32);
+    let (cx, sx) = ((bx + bw * 0.5) / w * 2.0 - 1.0, bw / w);
+    let (cy, sy) = (1.0 - (by + bh * 0.5) / h * 2.0, bh / h);
+    let m = *mvp;
+    for c in 0..4 {
+        mvp[c * 4] = (m[c * 4] - cx * m[c * 4 + 3]) / sx;
+        mvp[c * 4 + 1] = (m[c * 4 + 1] - cy * m[c * 4 + 3]) / sy;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -488,5 +547,67 @@ mod tests {
         assert!((len(line[0]) - 1.0).abs() < 1e-12 && (len(line[100]) - 1.0).abs() < 1e-12);
         let top = line.iter().map(|&v| len(v)).fold(0.0, f64::max);
         assert!(top > 1.0 + 0.5 * AIRCRAFT[0].cruise_alt_m * 10.0 / EARTH_RADIUS_M, "{top}");
+    }
+
+    #[test]
+    fn plane_screen_box_contains_the_model() {
+        let r = sfo_hnd();
+        let st = r.state(0.5, true, 0.0);
+        let cam = Camera { lon: 0.0, lat: 0.0, alt: 0.02, pitch: 0.3, heading: 0.0, shift: [0.0, 0.0] };
+        let (w, h) = (1200.0, 800.0);
+        let (lon, lat) = vec_to_lonlat(st.ground);
+        let cam = Camera { lon, lat, ..cam };
+        let (mvp, _) = plane_matrices(&cam, w / h, &st, 200.0, 1.0, 21.0).expect("visible");
+        let b = ndc_bounds(&mvp, 21.0).expect("in front");
+        assert!(b[0] < b[2] && b[1] < b[3]);
+        // the origin and the nose are inside the box
+        for p in [[0.0f32, 0.0, 0.0], [0.0, 19.0, 0.0], [17.0, 0.0, 0.0], [-17.0, 0.0, 3.0]] {
+            let m = &mvp;
+            let wv = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
+            let x = (m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12]) / wv;
+            let y = (m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13]) / wv;
+            assert!(x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3], "{x},{y} not in {b:?}");
+        }
+        // a model reaching the camera plane gives no box
+        let mut bad = mvp;
+        bad[15] = -1.0;
+        bad[3] = 0.0;
+        bad[7] = 0.0;
+        bad[11] = 0.0;
+        assert!(ndc_bounds(&bad, 21.0).is_none());
+    }
+
+    #[test]
+    fn a_plane_drawn_in_its_box_lands_on_the_same_screen_pixel() {
+        let r = sfo_hnd();
+        let st = r.state(0.4, true, 0.0);
+        let (lon, lat) = vec_to_lonlat(st.ground);
+        let cam = Camera { lon, lat, alt: 0.01, pitch: 0.5, heading: 0.3, shift: [0.2, -0.1] };
+        let vp = [1280u32, 720];
+        let (mvp, _) = plane_matrices(&cam, 1280.0 / 720.0, &st, 300.0, 1.0, 21.0).expect("visible");
+        let b = ndc_bounds(&mvp, 21.0);
+        let bbox = plane_box(b, false, vp).expect("on screen");
+        assert!(bbox[2] % 128 == 0 || bbox[2] == vp[0]);
+        assert!(bbox[0] + bbox[2] <= vp[0] && bbox[1] + bbox[3] <= vp[1]);
+        let mut small = mvp;
+        remap_to_box(&mut small, vp, bbox);
+        let screen = |m: &[f32; 16], p: [f32; 3]| {
+            let wv = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
+            ((m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12]) / wv, (m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13]) / wv)
+        };
+        for p in [[0.0f32, 0.0, 0.0], [0.0, 19.0, 0.0], [17.0, 0.0, 0.0], [-17.0, 0.0, 3.0]] {
+            let (x, y) = screen(&mvp, p); // NDC on the full map
+            let (sx, sy) = screen(&small, p); // NDC inside the box
+            // box NDC -> full-map pixel
+            let px = bbox[0] as f32 + (sx + 1.0) * 0.5 * bbox[2] as f32;
+            let py = bbox[1] as f32 + (1.0 - sy) * 0.5 * bbox[3] as f32;
+            let (ex, ey) = ((x + 1.0) * 0.5 * vp[0] as f32, (1.0 - y) * 0.5 * vp[1] as f32);
+            assert!((px - ex).abs() < 0.05 && (py - ey).abs() < 0.05, "{px},{py} vs {ex},{ey}");
+            assert!(sx.abs() <= 1.0 && sy.abs() <= 1.0, "model leaves its box: {sx},{sy}");
+        }
+        // planes entirely off screen need no drawing at all
+        assert!(plane_box(Some([1.5, 0.0, 1.8, 0.2]), false, vp).is_none());
+        assert!(plane_box(None, false, vp).is_none());
+        assert_eq!(plane_box(None, true, vp), Some([0, 0, 1280, 720]));
     }
 }

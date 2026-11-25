@@ -54,6 +54,10 @@ pub struct PlaneGpu {
     target: Option<Target>,
     draws: Vec<PlaneDraw>,
     active: bool,
+    /// Where the planes are laid over the map: x, y, width, height in physical pixels.
+    bbox: [u32; 4],
+    /// What the target currently shows; the planes are only redrawn when this changes.
+    key: Vec<u8>,
 }
 
 impl PlaneGpu {
@@ -188,6 +192,8 @@ impl PlaneGpu {
             target: None,
             draws: Vec::new(),
             active: false,
+            bbox: [0; 4],
+            key: Vec::new(),
         }
     }
 
@@ -263,6 +269,9 @@ impl PlaneGpu {
     }
 
     /// Draws all planes into the offscreen texture (or marks them as not shown).
+    ///
+    /// `bbox` is the part of the map (x, y, w, h in physical pixels) that contains every plane;
+    /// only that part is rendered and composited, and the `mvp`s are already remapped to it.
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
@@ -270,22 +279,38 @@ impl PlaneGpu {
         encoder: &mut wgpu::CommandEncoder,
         draws: &[PlaneDraw],
         srgb: bool,
-        viewport_px: [u32; 2],
+        bbox: [u32; 4],
         supersample: bool,
     ) {
         self.active = false;
         self.draws.clear();
         self.draws.extend(draws.iter().copied().filter(|d| matches!(self.models.get(d.model), Some(Some(_)))));
-        if self.draws.is_empty() || viewport_px[0] == 0 || viewport_px[1] == 0 {
+        if self.draws.is_empty() || bbox[2] == 0 || bbox[3] == 0 {
             return;
         }
-        // Supersample 2x for smooth edges unless the screen is already huge.
-        let ss = if supersample && (viewport_px[0] as u64) * (viewport_px[1] as u64) <= 2_600_000 { 2 } else { 1 };
+        // Supersample 2x for smooth edges unless the area is already huge.
+        let ss = if supersample && (bbox[2] as u64) * (bbox[3] as u64) <= 2_600_000 { 2 } else { 1 };
         let limit = device.limits().max_texture_dimension_2d;
-        let size = ((viewport_px[0] * ss).min(limit), (viewport_px[1] * ss).min(limit));
-        if self.target.as_ref().map_or(true, |t| t.size != size) {
+        let size = ((bbox[2] * ss).min(limit), (bbox[3] * ss).min(limit));
+        self.bbox = bbox;
+        let size_changed = self.target.as_ref().map_or(true, |t| t.size != size);
+        if size_changed {
             self.target = Some(self.make_target(device, size));
         }
+        // Nothing moved since the last frame: the picture in the target is still right.
+        let mut key = Vec::with_capacity(self.draws.len() * 136 + 8);
+        key.push(srgb as u8);
+        for d in &self.draws {
+            key.extend_from_slice(&(d.model as u32).to_le_bytes());
+            for v in d.mvp.iter().chain(d.nrm.iter()) {
+                key.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        if !size_changed && key == self.key {
+            self.active = true;
+            return;
+        }
+        self.key = key;
         self.ensure_uniforms(device, self.draws.len());
         for (i, d) in self.draws.iter().enumerate() {
             let u = Uniform { mvp: d.mvp, nrm: d.nrm, flags: [if srgb { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0] };
@@ -323,15 +348,21 @@ impl PlaneGpu {
         self.active = true;
     }
 
-    /// Lays the rendered plane over the map (inside egui's pass, viewport = the map rect).
-    pub fn paint(&self, pass: &mut wgpu::RenderPass<'static>) {
+    /// Lays the rendered planes over the map, inside egui's pass. The viewport is narrowed to
+    /// the box the planes were drawn for, so only those pixels are touched.
+    pub fn paint(&self, pass: &mut wgpu::RenderPass<'static>, info: &egui::PaintCallbackInfo) {
         if !self.active {
             return;
         }
         if let Some(t) = &self.target {
+            let vp = info.viewport_in_pixels();
+            let [bx, by, bw, bh] = self.bbox;
+            pass.set_viewport((vp.left_px as u32 + bx) as f32, (vp.top_px as u32 + by) as f32, bw as f32, bh as f32, 0.0, 1.0);
             pass.set_pipeline(&self.composite);
             pass.set_bind_group(0, &t.bind_group, &[]);
             pass.draw(0..3, 0..1);
+            // Back to the whole map rectangle for whatever is drawn next.
+            pass.set_viewport(vp.left_px as f32, vp.top_px as f32, vp.width_px as f32, vp.height_px as f32, 0.0, 1.0);
         }
     }
 }
@@ -351,8 +382,9 @@ pub fn upload(rs: &egui_wgpu::RenderState, index: usize, model: &ModelData) {
 pub struct PlaneCallback {
     pub draws: Vec<PlaneDraw>,
     pub srgb: bool,
-    /// Size of the map rectangle in physical pixels.
-    pub viewport_px: [u32; 2],
+    /// The part of the map rectangle that holds all the planes (x, y, w, h in physical pixels);
+    /// `draws` are already remapped to it.
+    pub bbox: [u32; 4],
     /// Draw at twice the resolution and shrink, for smooth edges (costs GPU time on big screens).
     pub supersample: bool,
 }
@@ -367,14 +399,14 @@ impl egui_wgpu::CallbackTrait for PlaneCallback {
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         if let Some(gpu) = resources.get_mut::<PlaneGpu>() {
-            gpu.prepare(device, queue, encoder, &self.draws, self.srgb, self.viewport_px, self.supersample);
+            gpu.prepare(device, queue, encoder, &self.draws, self.srgb, self.bbox, self.supersample);
         }
         Vec::new()
     }
 
-    fn paint(&self, _info: egui::PaintCallbackInfo, pass: &mut wgpu::RenderPass<'static>, resources: &egui_wgpu::CallbackResources) {
+    fn paint(&self, info: egui::PaintCallbackInfo, pass: &mut wgpu::RenderPass<'static>, resources: &egui_wgpu::CallbackResources) {
         if let Some(gpu) = resources.get::<PlaneGpu>() {
-            gpu.paint(pass);
+            gpu.paint(pass, &info);
         }
     }
 }

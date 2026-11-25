@@ -84,6 +84,10 @@ below each aircraft, and the aircraft are always drawn above the route lines and
 - The GPU maps every vertex from Web Mercator onto the sphere in the vertex shader, so zooming and rotating never
   re-uploads geometry. Positions are computed relative to the point under the camera with cancellation-free
   formulas, so they stay precise at any zoom. Zoomed in far enough, the sphere is indistinguishable from a flat map.
+- **Low GPU use:** the map is drawn into an offscreen image that is kept between frames and only redrawn when the
+  camera or the tiles change, so train dots, aircraft and UI hovers cost almost nothing. Aircraft are rendered only
+  in a small box around themselves, and their redraw rate follows how far they really move on screen (a real-time
+  flight in a wide view redraws a few times a second).
 - Roads/borders are drawn as constant-pixel-width anti-aliased lines; widths and visibility follow the zoom level.
 - While a tile is still loading, its nearest loaded parent tile is shown instead.
 - Labels are projected from the tiles' point features and placed by priority with simple collision avoidance.
