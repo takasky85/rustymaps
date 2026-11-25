@@ -540,16 +540,16 @@ fn draw_route(
         runs.push(run);
     }
     for r in &runs {
-        painter.add(egui::Shape::line(r.clone(), egui::Stroke::new(5.0, egui::Color32::from_black_alpha(110))));
+        painter.add(egui::Shape::line(r.clone(), egui::Stroke::new(5.0_f32, egui::Color32::from_black_alpha(110))));
     }
     for r in &runs {
-        painter.add(egui::Shape::line(r.clone(), egui::Stroke::new(2.5, egui::Color32::from_rgb(255, 140, 0))));
+        painter.add(egui::Shape::line(r.clone(), egui::Stroke::new(2.5_f32, egui::Color32::from_rgb(255, 140, 0))));
     }
 
     for (name, (lon, lat)) in [("SFO", flight::SFO), ("HND", flight::HND)] {
         let p = lonlat_vec(lon, lat);
         if let Some(s) = to_screen(p) {
-            painter.circle(s, 4.0, egui::Color32::WHITE, egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 140, 0)));
+            painter.circle(s, 4.0, egui::Color32::WHITE, egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(255, 140, 0)));
             labels.push(Cand::new(0.5, name.to_string(), 12.0, [255, 120, 0], [255, 255, 255], s + egui::vec2(0.0, -14.0)));
         }
     }
@@ -561,7 +561,7 @@ fn draw_route(
         if (a[0] - b[0]).hypot(a[1] - b[1]) < 7.0 && !occluded(cam, pos) {
             let c = rect.min + egui::vec2(a[0] as f32, a[1] as f32);
             if rect.contains(c) {
-                painter.circle_stroke(c, 11.0, egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 140, 0)));
+                painter.circle_stroke(c, 11.0, egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(255, 140, 0)));
             }
         }
     }

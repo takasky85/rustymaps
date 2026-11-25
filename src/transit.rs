@@ -252,7 +252,7 @@ pub fn draw(
                     if let Some(s) = to_screen(p) {
                         if on_screen.contains(s) {
                             let c = line.color;
-                            painter.circle(s, 9.5, Color32::from_rgb(c[0], c[1], c[2]), Stroke::new(2.0, Color32::WHITE));
+                            painter.circle(s, 9.5, Color32::from_rgb(c[0], c[1], c[2]), Stroke::new(2.0_f32, Color32::WHITE));
                             painter.text(s, Align2::CENTER_CENTER, &line.badge, FontId::proportional(11.0), Color32::WHITE);
                         }
                     }
@@ -270,7 +270,7 @@ pub fn draw(
                 }
                 let inter = st.lines.len() >= 2;
                 let rr = if inter { r * 1.35 } else { r };
-                painter.circle(s, rr, Color32::WHITE, Stroke::new(if inter { 2.6 } else { 1.8 }, ink));
+                painter.circle(s, rr, Color32::WHITE, Stroke::new(if inter { 2.6_f32 } else { 1.8_f32 }, ink));
                 if !st.name.is_empty() && zf >= 12.2 {
                     labels.push(StationLabel { at: s + egui::vec2(0.0, -(rr + 9.0)), text: st.name.clone(), interchange: inter });
                 }
