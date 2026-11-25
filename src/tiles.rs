@@ -15,7 +15,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use eframe::{egui, egui_wgpu};
 
-use crate::camera::{dot, lonlat_to_merc, merc_to_vec, Camera, FOV_Y};
+use crate::camera::{dot, lonlat_to_merc, merc_to_vec, normalize, Camera, FOV_Y};
 use crate::gpu::MapGpu;
 use crate::mesh::{self, Label, TileMesh};
 use crate::tile_id::TileId;
@@ -267,6 +267,7 @@ pub struct TileManager {
 impl TileManager {
     pub fn new(ctx: &egui::Context, rs: egui_wgpu::RenderState) -> Self {
         rs.renderer.write().callback_resources.insert(MapGpu::new(&rs.device, rs.target_format));
+        crate::plane::insert(&rs);
 
         let cache = Arc::new(DiskCache::new());
         let shared = Arc::new(Shared {
@@ -448,10 +449,12 @@ pub fn visible_tiles(cam: &Camera, w: f64, h: f64, z: u8, zf: f64) -> Vec<TileId
     let tile_px = 512.0 * 2f64.powf(zf - z as f64);
     let half_diag = 0.5 * (w * w + h * h).sqrt();
     // Away from the centre the globe is foreshortened, so more tiles fit.
-    let k = 1.0 + cam.alt.min(1.0) * 1.5;
+    let k = (1.0 + cam.alt.min(1.0) * 1.5) / cam.pitch.cos().max(0.35);
     let r = ((half_diag / tile_px * k).ceil() as i64 + 1).clamp(1, 8);
 
     let dir = cam.dir();
+    // The horizon is seen from the camera's own position, which is off to the side when tilted.
+    let nadir = normalize(cam.pos());
     let horizon = (1.0 / cam.dist()).clamp(-1.0, 1.0).acos();
     let px_per_rad = h / (2.0 * (FOV_Y * 0.5).tan() * cam.alt.max(1e-9));
     let size = 1.0 / n as f64;
@@ -474,7 +477,7 @@ pub fn visible_tiles(cam: &Camera, w: f64, h: f64, z: u8, zf: f64) -> Vec<TileId
             let (tmx, tmy) = id.center_merc();
             let c = merc_to_vec(tmx, tmy);
             let ang = dot(c, dir).clamp(-1.0, 1.0).acos();
-            if ang > horizon + tile_rad {
+            if dot(c, nadir).clamp(-1.0, 1.0).acos() > horizon + tile_rad {
                 continue;
             }
             if ang > tile_rad {

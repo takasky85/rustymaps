@@ -1,9 +1,10 @@
 //! Globe camera. Std-only math, f64 throughout.
 //!
-//! The planet is a unit sphere. The camera floats at `1 + alt` planet radii
-//! above a lon/lat point, looking straight down at the planet's centre with
-//! north at the top of the screen. Zooming in lowers `alt`; at city scale the
-//! visible patch of sphere is so small that it simply looks flat.
+//! The planet is a unit sphere. The camera orbits a lon/lat target point at distance
+//! `alt` (planet radii), looking at it with north at the top of the screen. With
+//! `pitch == 0` it hovers straight above the target; tilting swings it south, like
+//! a map app's 3D view. Zooming in lowers `alt`; at city scale the visible patch of
+//! sphere is so small that it simply looks flat.
 
 use std::f64::consts::PI;
 
@@ -11,8 +12,10 @@ pub type V3 = [f64; 3];
 
 /// Vertical field of view (45 degrees).
 pub const FOV_Y: f64 = std::f64::consts::FRAC_PI_4;
-/// Lowest allowed altitude, in planet radii (~5 km). Limited by f32 precision on the GPU.
+/// Lowest allowed altitude, in planet radii (~130 m above the ground).
 pub const MIN_ALT: f64 = 0.00002;
+/// Largest tilt (about 72 degrees from straight down).
+pub const MAX_PITCH: f64 = 1.25;
 pub const MAX_ALT: f64 = 6.0;
 /// 85 degrees in radians (just inside the Web Mercator limit).
 pub const MAX_LAT: f64 = 1.4835298641951802;
@@ -51,6 +54,27 @@ pub fn vec_to_lonlat(p: V3) -> (f64, f64) {
     (p[0].atan2(p[2]), p[1].clamp(-1.0, 1.0).asin())
 }
 
+pub fn mul4(a: &[[f64; 4]; 4], b: &[[f64; 4]; 4]) -> [[f64; 4]; 4] {
+    let mut m = [[0.0; 4]; 4];
+    for (i, row) in m.iter_mut().enumerate() {
+        for (j, cell) in row.iter_mut().enumerate() {
+            *cell = (0..4).map(|k| a[i][k] * b[k][j]).sum();
+        }
+    }
+    m
+}
+
+/// Column-major f32 matrix, ready for a WGSL `mat4x4<f32>`.
+pub fn cols_f32(m: &[[f64; 4]; 4]) -> [f32; 16] {
+    let mut out = [0f32; 16];
+    for col in 0..4 {
+        for row in 0..4 {
+            out[col * 4 + row] = m[row][col] as f32;
+        }
+    }
+    out
+}
+
 /// Normalized Web Mercator (0..1, y down) to unit-sphere position.
 pub fn merc_to_vec(mx: f64, my: f64) -> V3 {
     let lon = (mx - 0.5) * 2.0 * PI;
@@ -72,13 +96,15 @@ pub fn wrap_pi(a: f64) -> f64 {
 pub struct Camera {
     pub lon: f64,
     pub lat: f64,
-    /// Height above the surface in planet radii.
+    /// Distance from the target point to the camera, in planet radii.
     pub alt: f64,
+    /// Tilt away from straight-down, radians (0..=MAX_PITCH).
+    pub pitch: f64,
 }
 
 impl Camera {
     pub fn from_degrees(lon_deg: f64, lat_deg: f64, alt: f64) -> Self {
-        let mut c = Camera { lon: lon_deg.to_radians(), lat: lat_deg.to_radians(), alt };
+        let mut c = Camera { lon: lon_deg.to_radians(), lat: lat_deg.to_radians(), alt, pitch: 0.0 };
         c.normalize();
         c
     }
@@ -87,35 +113,51 @@ impl Camera {
         self.lon = wrap_pi(self.lon);
         self.lat = self.lat.clamp(-MAX_LAT, MAX_LAT);
         self.alt = self.alt.clamp(MIN_ALT, MAX_ALT);
+        self.pitch = self.pitch.clamp(0.0, MAX_PITCH);
     }
 
-    /// Unit vector from the planet centre towards the camera.
+    /// Unit vector from the planet centre towards the target point.
     pub fn dir(&self) -> V3 {
         lonlat_to_vec(self.lon, self.lat)
     }
 
-    pub fn dist(&self) -> f64 {
-        1.0 + self.alt
+    /// Local frame at the target: (east, north, up).
+    pub fn frame(&self) -> (V3, V3, V3) {
+        let u = self.dir();
+        let e = normalize(cross([0.0, 1.0, 0.0], u));
+        let n = cross(u, e);
+        (e, n, u)
     }
 
+    /// Camera position in world space.
     pub fn pos(&self) -> V3 {
-        scale(self.dir(), self.dist())
+        let (_, n, u) = self.frame();
+        let up = 1.0 + self.alt * self.pitch.cos();
+        add(scale(u, up), scale(n, -self.alt * self.pitch.sin()))
+    }
+
+    /// Distance of the camera from the planet's centre.
+    pub fn dist(&self) -> f64 {
+        let p = self.pos();
+        dot(p, p).sqrt()
     }
 
     /// (right, up, forward) in world space.
     pub fn basis(&self) -> (V3, V3, V3) {
-        let f = scale(self.dir(), -1.0);
-        let north = [0.0, 1.0, 0.0];
-        let right = normalize(cross(f, north));
-        let up = cross(right, f);
-        (right, up, f)
+        let (e, n, u) = self.frame();
+        let (sp, cp) = (self.pitch.sin(), self.pitch.cos());
+        let f = add(scale(u, -cp), scale(n, sp));
+        let up = cross(e, f);
+        (e, up, f)
     }
 
-    /// Row-major perspective projection (right-handed, depth 0..1). Tiles are drawn in
-    /// camera-relative coordinates (see shader.wgsl), so this is all they need.
+    /// Row-major perspective projection (right-handed, depth 0..1).
     pub fn proj(&self, aspect: f64) -> [[f64; 4]; 4] {
-        let near = (self.alt * 0.05).max(1e-7);
-        let far = self.dist() + 1.0;
+        self.proj_nf(aspect, (self.alt * 0.05).max(1e-7), self.dist() + 1.0)
+    }
+
+    /// Perspective projection with explicit clip distances.
+    pub fn proj_nf(&self, aspect: f64, near: f64, far: f64) -> [[f64; 4]; 4] {
         let t = 1.0 / (FOV_Y * 0.5).tan();
         [
             [t / aspect, 0.0, 0.0, 0.0],
@@ -125,47 +167,43 @@ impl Camera {
         ]
     }
 
-    pub fn proj_cols(&self, aspect: f64) -> [f32; 16] {
-        let m = self.proj(aspect);
-        let mut out = [0f32; 16];
-        for col in 0..4 {
-            for row in 0..4 {
-                out[col * 4 + row] = m[row][col] as f32;
-            }
-        }
-        out
-    }
-
-    /// Row-major view-projection matrix (right-handed, depth 0..1).
-    pub fn view_proj(&self, aspect: f64) -> [[f64; 4]; 4] {
+    /// Row-major world -> view matrix.
+    pub fn view(&self) -> [[f64; 4]; 4] {
         let c = self.pos();
         let (r, u, f) = self.basis();
-        let v = [
+        [
             [r[0], r[1], r[2], -dot(r, c)],
             [u[0], u[1], u[2], -dot(u, c)],
             [-f[0], -f[1], -f[2], dot(f, c)],
             [0.0, 0.0, 0.0, 1.0],
-        ];
-        let p = self.proj(aspect);
-        let mut m = [[0.0; 4]; 4];
-        for (i, row) in m.iter_mut().enumerate() {
-            for (j, cell) in row.iter_mut().enumerate() {
-                *cell = (0..4).map(|k| p[i][k] * v[k][j]).sum();
-            }
-        }
-        m
+        ]
     }
 
-    /// Column-major f32 matrix, ready for a WGSL `mat4x4<f32>`.
+    /// Row-major world -> clip matrix (right-handed, depth 0..1).
+    pub fn view_proj(&self, aspect: f64) -> [[f64; 4]; 4] {
+        mul4(&self.proj(aspect), &self.view())
+    }
+
+    /// Clip matrix for positions given *relative to the target point* in its local
+    /// (east, north, radial-offset) frame, which is how the tile shader works, so that
+    /// precision never degrades with zoom.
+    pub fn rel_proj(&self, aspect: f64) -> [[f64; 4]; 4] {
+        let (sp, cp) = (self.pitch.sin(), self.pitch.cos());
+        let v = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, cp, sp, 0.0],
+            [0.0, -sp, cp, -self.alt],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        mul4(&self.proj(aspect), &v)
+    }
+
     pub fn view_proj_cols(&self, aspect: f64) -> [f32; 16] {
-        let m = self.view_proj(aspect);
-        let mut out = [0f32; 16];
-        for col in 0..4 {
-            for row in 0..4 {
-                out[col * 4 + row] = m[row][col] as f32;
-            }
-        }
-        out
+        cols_f32(&self.view_proj(aspect))
+    }
+
+    pub fn rel_proj_cols(&self, aspect: f64) -> [f32; 16] {
+        cols_f32(&self.rel_proj(aspect))
     }
 
     /// Projects a world-space point to screen pixels (origin top-left).
@@ -220,7 +258,7 @@ impl Camera {
         let rad_per_px = 2.0 * self.alt * (FOV_Y * 0.5).tan() / h;
         let cos_lat = self.lat.cos().max(0.05);
         self.lon -= dx * rad_per_px / cos_lat;
-        self.lat += dy * rad_per_px;
+        self.lat += dy * rad_per_px / self.pitch.cos().max(0.3);
         self.normalize();
     }
 }
@@ -288,7 +326,7 @@ mod tests {
     fn zoom_helpers_are_inverse() {
         let lat = 37.8f64.to_radians();
         let alt = Camera::alt_for_zoom(12.5, lat, 900.0);
-        let cam = Camera { lon: 0.0, lat, alt };
+        let cam = Camera { lon: 0.0, lat, alt, pitch: 0.0 };
         assert!(close(cam.zoom_f(900.0), 12.5, 1e-9));
         // Globe view should land near zoom 2-3 for a normal window.
         let globe = Camera::from_degrees(0.0, 0.0, 2.2);
@@ -322,7 +360,7 @@ mod tests {
     #[test]
     fn camera_relative_formula_matches_absolute() {
         for &(lon, lat) in &[(-2.136, 0.659), (0.3, -0.2), (3.0, 1.2), (0.0, 0.0)] {
-            let cam = Camera { lon, lat, alt: 0.1 };
+            let cam = Camera { lon, lat, alt: 0.1, pitch: 0.0 };
             let y_c = lat.sin().atanh();
             let (r, u, _f) = cam.basis();
             let d = cam.dir();
@@ -336,5 +374,35 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn relative_matrix_agrees_with_world_matrix_under_tilt() {
+        for &pitch in &[0.0, 0.6, 1.1] {
+            let cam = Camera { lon: -2.136, lat: 0.659, alt: 0.01, pitch };
+            let y_c = cam.lat.sin().atanh();
+            let (aspect, vp, rp) = (1.6, cam.view_proj(1.6), cam.rel_proj(1.6));
+            let _ = aspect;
+            for &(dl, dy) in &[(0.0, 0.0), (0.002, -0.003), (-0.004, 0.001)] {
+                let p = lonlat_to_vec(cam.lon + dl, (y_c + dy).sinh().atan());
+                let rel = rel_formula(cam.lat, dl, dy);
+                let apply = |m: &[[f64; 4]; 4], v: [f64; 3]| {
+                    let o: Vec<f64> = (0..4).map(|i| m[i][0] * v[0] + m[i][1] * v[1] + m[i][2] * v[2] + m[i][3]).collect();
+                    [o[0] / o[3], o[1] / o[3]]
+                };
+                let a = apply(&vp, p);
+                let b = apply(&rp, rel);
+                assert!((a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6, "pitch {pitch}: {a:?} vs {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn tilt_keeps_target_at_screen_centre() {
+        let cam = Camera { lon: 0.4, lat: 0.5, alt: 0.05, pitch: 0.9 };
+        let s = cam.project(cam.dir(), 1000.0, 600.0).unwrap();
+        assert!((s[0] - 500.0).abs() < 1e-6 && (s[1] - 300.0).abs() < 1e-6, "{s:?}");
+        let (lon, lat) = cam.pick(500.0, 300.0, 1000.0, 600.0).unwrap();
+        assert!((lon - 0.4).abs() < 1e-9 && (lat - 0.5).abs() < 1e-9);
     }
 }

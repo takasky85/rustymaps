@@ -17,9 +17,9 @@ struct Style {
 
 struct Globals {
     view_proj: mat4x4<f32>,  // absolute world -> clip (base sphere only)
-    proj: mat4x4<f32>,       // camera-relative view -> clip (tiles)
+    proj: mat4x4<f32>,       // target-relative (east, north, radial) -> clip (tiles)
     cam_pos: vec4<f32>,  // xyz = camera position in planet radii, w = 1 if target is sRGB
-    cam_rel: vec4<f32>,  // x = cos(camera lat), y = sin(camera lat), z = altitude
+    cam_rel: vec4<f32>,  // x = cos(target lat), y = sin(target lat), z = alt*cos(pitch), w = alt*sin(pitch)
     screen: vec4<f32>,   // xy = viewport size in physical pixels
     styles: array<Style, 32>,
 };
@@ -35,7 +35,7 @@ struct Tile {
 
 const PI: f32 = 3.14159265358979;
 
-// Position of a tile-local point relative to the surface point under the camera:
+// Position of a tile-local point relative to the target point on the surface:
 // x = east, y = north, z = radial offset (<= 0, equals cos(angle) - 1).
 fn rel_pos(p: vec2<f32>) -> vec3<f32> {
     let dm = tile.rel.xy + p * tile.rel.z;
@@ -52,12 +52,13 @@ fn rel_pos(p: vec2<f32>) -> vec3<f32> {
 }
 
 fn rel_clip(r: vec3<f32>) -> vec4<f32> {
-    return g.proj * vec4<f32>(r.x, r.y, r.z - g.cam_rel.z, 1.0);
+    return g.proj * vec4<f32>(r, 1.0);
 }
 
 // > 0 when the point is on the visible side of the horizon.
 fn rel_horizon(r: vec3<f32>) -> f32 {
-    return g.cam_rel.z + r.z * (1.0 + g.cam_rel.z);
+    // dot(point, camera) - 1, with the camera at (1 + alt*cos p) up and alt*sin p south of the target.
+    return g.cam_rel.z + r.z * (1.0 + g.cam_rel.z) - r.y * g.cam_rel.w;
 }
 
 // Premultiplied output; converts to linear when the surface format is sRGB.

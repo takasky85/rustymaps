@@ -50,63 +50,96 @@ fn lerp_w(zf: f64, z0: f64, w0: f64, z1: f64, w1: f64) -> f32 {
     (w0 + (w1 - w0) * t) as f32
 }
 
+/// Selectable map looks. Same data and widths, different colours.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Palette {
+    /// Colours of the standard openstreetmap.org map.
+    Standard,
+    /// A livelier take on the same layout: stronger water, parks and roads.
+    Bright,
+    /// Pale, low-contrast background that lets overlays stand out.
+    Light,
+}
+
+impl Palette {
+    pub const ALL: [Palette; 3] = [Palette::Standard, Palette::Bright, Palette::Light];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Palette::Standard => "OSM Standard",
+            Palette::Bright => "OSM Bright",
+            Palette::Light => "Light",
+        }
+    }
+
+    /// RGB per style id (see the constants above).
+    fn colors(self) -> [[u8; 3]; COUNT] {
+        match self {
+            //        BG              ICE             SAND            FARM            GRASS           WETLAND
+            Palette::Standard => [
+                [242, 239, 233], [255, 255, 255], [245, 233, 198], [238, 240, 213], [205, 235, 176], [181, 214, 193],
+                //   WOOD            RES             OTHER           PARK            WATER           BUILDING
+                [173, 209, 158], [224, 223, 223], [231, 222, 232], [200, 250, 204], [170, 211, 223], [217, 208, 201],
+                //   WATERWAY        FERRY           PATH            RAIL            SERVICE         MINOR
+                [170, 211, 223], [102, 153, 204], [190, 160, 150], [150, 150, 150], [255, 255, 255], [255, 255, 255],
+                //   TERTIARY        SECONDARY       PRIMARY         TRUNK           MOTORWAY
+                [255, 255, 255], [247, 250, 191], [252, 214, 164], [249, 178, 156], [232, 146, 162],
+                //   BORDER_STATE    BORDER_COUNTRY
+                [172, 140, 172], [140, 100, 140],
+            ],
+            Palette::Bright => [
+                [248, 244, 232], [255, 255, 255], [252, 232, 160], [243, 245, 190], [178, 232, 140], [150, 218, 180],
+                [128, 208, 110], [240, 232, 218], [235, 228, 244], [150, 228, 130], [96, 190, 240], [228, 210, 196],
+                [96, 190, 240], [40, 120, 220], [220, 150, 130], [140, 140, 150], [255, 255, 255], [255, 255, 255],
+                [255, 255, 255], [255, 244, 120], [255, 200, 80], [255, 150, 100], [255, 100, 140],
+                [170, 110, 190], [120, 60, 150],
+            ],
+            Palette::Light => [
+                [245, 245, 242], [255, 255, 255], [244, 240, 228], [240, 242, 234], [230, 238, 224], [224, 236, 230],
+                [220, 232, 212], [238, 238, 234], [234, 234, 238], [226, 237, 220], [208, 222, 232], [232, 230, 226],
+                [208, 222, 232], [170, 190, 210], [225, 218, 212], [200, 200, 204], [255, 255, 255], [255, 255, 255],
+                [255, 255, 255], [252, 252, 246], [250, 244, 232], [248, 236, 224], [246, 226, 214],
+                [196, 184, 204], [160, 144, 170],
+            ],
+        }
+    }
+}
+
 /// Style table for the shader: per id `[r, g, b, a, width_px, casing_px, 0, 0]`.
-pub fn table(zf: f64, ppp: f32) -> [[f32; 8]; TABLE_SIZE] {
+pub fn table(zf: f64, ppp: f32, palette: Palette) -> [[f32; 8]; TABLE_SIZE] {
     let mut t = [[0.0f32; 8]; TABLE_SIZE];
-
-    let mut fill = |id: u32, rgb: [u8; 3], a: f32| {
-        t[id as usize] = [
-            rgb[0] as f32 / 255.0,
-            rgb[1] as f32 / 255.0,
-            rgb[2] as f32 / 255.0,
-            a,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-        ];
+    let cols = palette.colors();
+    let rgb = |id: u32| {
+        let c = cols[id as usize];
+        [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0]
     };
-    fill(BG, [236, 233, 224], 1.0);
-    fill(COVER_ICE, [250, 252, 255], 1.0);
-    fill(COVER_SAND, [240, 232, 200], 1.0);
-    fill(COVER_FARM, [233, 236, 214], 1.0);
-    fill(COVER_GRASS, [214, 230, 190], 1.0);
-    fill(COVER_WETLAND, [205, 226, 205], 1.0);
-    fill(COVER_WOOD, [190, 218, 170], 1.0);
-    fill(LANDUSE_RES, [231, 227, 217], 1.0);
-    fill(LANDUSE_OTHER, [224, 224, 214], 1.0);
-    fill(PARK, [200, 228, 175], 1.0);
-    fill(WATER, [150, 190, 232], 1.0);
-    // Flat building footprints fade in at city scale.
-    fill(BUILDING, [214, 206, 196], ((zf - 13.0).clamp(0.0, 1.0)) as f32);
 
-    let mut line = |id: u32, rgb: [u8; 3], w: f32| {
+    for id in BG..=BUILDING {
+        let c = rgb(id);
+        // Flat building footprints fade in at city scale.
+        let a = if id == BUILDING { ((zf - 13.0).clamp(0.0, 1.0)) as f32 } else { 1.0 };
+        t[id as usize] = [c[0], c[1], c[2], a, 0.0, 0.0, 0.0, 0.0];
+    }
+
+    let mut line = |id: u32, w: f32| {
+        let c = rgb(id);
         // A thin darker casing makes wide roads readable on light ground.
         let casing = if w >= 3.0 { 1.0 } else { 0.0 };
-        t[id as usize] = [
-            rgb[0] as f32 / 255.0,
-            rgb[1] as f32 / 255.0,
-            rgb[2] as f32 / 255.0,
-            1.0,
-            w * ppp,
-            casing * ppp,
-            0.0,
-            0.0,
-        ];
+        t[id as usize] = [c[0], c[1], c[2], 1.0, w * ppp, casing * ppp, 0.0, 0.0];
     };
-    line(WATERWAY, [150, 190, 232], lerp_w(zf, 7.0, 0.6, 16.0, 3.5));
-    line(FERRY, [110, 140, 190], lerp_w(zf, 8.0, 0.8, 16.0, 1.5));
-    line(PATH, [205, 195, 185], lerp_w(zf, 14.0, 0.8, 17.0, 1.8));
-    line(RAIL, [140, 140, 145], lerp_w(zf, 9.0, 0.8, 16.0, 2.0));
-    line(ROAD_SERVICE, [255, 255, 255], lerp_w(zf, 14.0, 1.0, 17.0, 5.0));
-    line(ROAD_MINOR, [255, 255, 255], lerp_w(zf, 12.5, 0.8, 17.0, 7.0));
-    line(ROAD_TERTIARY, [255, 255, 255], lerp_w(zf, 11.0, 0.8, 17.0, 8.5));
-    line(ROAD_SECONDARY, [255, 240, 160], lerp_w(zf, 9.0, 0.9, 17.0, 10.0));
-    line(ROAD_PRIMARY, [253, 222, 140], lerp_w(zf, 7.0, 1.0, 17.0, 11.0));
-    line(ROAD_TRUNK, [250, 200, 120], lerp_w(zf, 6.0, 1.1, 17.0, 11.5));
-    line(ROAD_MOTORWAY, [244, 170, 110], lerp_w(zf, 4.5, 1.2, 17.0, 12.0));
-    line(BORDER_STATE, [160, 140, 170], lerp_w(zf, 3.5, 0.7, 8.0, 1.3));
-    line(BORDER_COUNTRY, [140, 110, 150], lerp_w(zf, 0.0, 0.9, 8.0, 1.8));
+    line(WATERWAY, lerp_w(zf, 7.0, 0.6, 16.0, 3.5));
+    line(FERRY, lerp_w(zf, 8.0, 0.8, 16.0, 1.5));
+    line(PATH, lerp_w(zf, 14.0, 0.8, 17.0, 1.8));
+    line(RAIL, lerp_w(zf, 9.0, 0.8, 16.0, 2.0));
+    line(ROAD_SERVICE, lerp_w(zf, 14.0, 1.0, 17.0, 5.0));
+    line(ROAD_MINOR, lerp_w(zf, 12.5, 0.8, 17.0, 7.0));
+    line(ROAD_TERTIARY, lerp_w(zf, 11.0, 0.8, 17.0, 8.5));
+    line(ROAD_SECONDARY, lerp_w(zf, 9.0, 0.9, 17.0, 10.0));
+    line(ROAD_PRIMARY, lerp_w(zf, 7.0, 1.0, 17.0, 11.0));
+    line(ROAD_TRUNK, lerp_w(zf, 6.0, 1.1, 17.0, 11.5));
+    line(ROAD_MOTORWAY, lerp_w(zf, 4.5, 1.2, 17.0, 12.0));
+    line(BORDER_STATE, lerp_w(zf, 3.5, 0.7, 8.0, 1.3));
+    line(BORDER_COUNTRY, lerp_w(zf, 0.0, 0.9, 8.0, 1.8));
     t
 }
 
@@ -204,8 +237,8 @@ mod tests {
 
     #[test]
     fn table_has_every_style_and_hides_by_zoom() {
-        let far = table(1.0, 1.0);
-        let near = table(14.0, 1.0);
+        let far = table(1.0, 1.0, Palette::Standard);
+        let near = table(14.0, 1.0, Palette::Standard);
         assert!(far[ROAD_MINOR as usize][4] == 0.0, "minor roads hidden at globe scale");
         assert!(near[ROAD_MINOR as usize][4] > 1.0, "minor roads visible at city scale");
         assert!(far[BORDER_COUNTRY as usize][4] > 0.0, "country borders always visible");
@@ -213,8 +246,12 @@ mod tests {
         for id in 0..COUNT {
             assert!(near[id][3] >= 0.0);
         }
+        // every palette defines every style, and they really differ
+        let std_water = table(5.0, 1.0, Palette::Standard)[WATER as usize];
+        let bright_water = table(5.0, 1.0, Palette::Bright)[WATER as usize];
+        assert!(std_water[..3] != bright_water[..3]);
         // pixel-ratio scaling applies to widths
-        assert_eq!(table(14.0, 2.0)[ROAD_MINOR as usize][4], 2.0 * near[ROAD_MINOR as usize][4]);
+        assert_eq!(table(14.0, 2.0, Palette::Standard)[ROAD_MINOR as usize][4], 2.0 * near[ROAD_MINOR as usize][4]);
     }
 
     #[test]

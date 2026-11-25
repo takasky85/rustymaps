@@ -10,14 +10,36 @@ Rust + [egui](https://github.com/emilk/egui) + [wgpu](https://wgpu.rs). Map data
 | Action | Effect |
 | --- | --- |
 | Drag | Pan |
-| Mouse wheel / pinch | Zoom toward the cursor |
+| Right-drag, or the **Tilt** slider | Tilt the view (3D perspective) |
+| Mouse wheel / pinch | Zoom toward the cursor (down to street level, about zoom 19) |
 | Double-click | Fly in on that spot |
 | **San Francisco** button | Fly from wherever you are to San Francisco (zoom ≈ 12.5) |
 | **Globe** button | Fly back out to the globe |
 | **Clear cache** button | Delete the on-disk tile cache |
 
-The corner readout shows frame rate, zoom level, tile counts and which GPU is in use. The app always asks for the
+The control window (top left, collapsible) also has the map **Style** (OSM Standard, OSM Bright, Light), the
+**Transit maps** switches and the **Flight** controls described below. It shows frame rate, zoom level, tile counts and which GPU is in use. The app always asks for the
 discrete / high-performance GPU first.
+
+## Transit maps
+
+Switch on **SF Muni Metro**, **Los Angeles Metro** or **Tokyo Metro** in the control window. Lines follow the real
+tracks (route relations from OpenStreetMap) but are drawn like a subway map: thick colour-coded lines with a white
+outline, white station circles with a dark ring (bigger at interchanges), lettered roundels at the line ends, and
+Tokyo Metro / LA Metro / Muni line colours. They appear from zoom 8, stations from 10.5.
+
+The route data is downloaded once from the public Overpass API (one request per system, with an identifying
+`User-Agent`) and cached next to the tile cache for 30 days. Systems are plain entries in `src/transit_data.rs`
+(bounding box, OSM filters, standard line colours), so adding another city is one more entry.
+
+## Flight simulation
+
+A Boeing 737 (the Southwest Airlines model, see credits) flies the great-circle route San Francisco → Tokyo Haneda at
+its real cruise altitude (35,000 ft) in about 11 simulated hours. Use the **progress slider** to place it anywhere on
+the route, **Fly** to let it move on its own (real time, 60x, 600x or 3600x), the **Plane size** slider to scale the
+model from 1x to 20,000x, **Look at plane** to fly the camera to it, and **Follow** to keep it centred. Tilt the view to
+see the model in 3D. At its true altitude the plane is only in front of the camera when you are higher than ~11 km, so
+at street zoom it is, correctly, behind you.
 
 ## How it works
 
@@ -40,7 +62,9 @@ tiles back off (8 s, 16 s, 32 s, 60 s) instead of being retried in a loop.
 ## Known limits
 
 - Maximum zoom is about level 19. The data itself stops at level 14, so beyond that you are magnifying the level-14 geometry (roads and outlines stay crisp, but there is no extra detail).
-- The view is north-up (no tilt or rotation).
+- The view is always north-up (tilt only; no rotation).
+- Where several transit lines share a track they are drawn on top of each other rather than side by side.
+- Transit route data comes from OpenStreetMap tags that I could not test against the live service from my sandbox; if a system fails to load, the control window says why.
 - While zooming quickly, areas with a loaded parent but loading children may briefly show doubled road lines.
 - Labels are horizontal and do not follow curves.
 
@@ -55,6 +79,10 @@ GitHub Actions (`.github/workflows/build.yml`) builds a Windows release on every
 `Cargo.lock` is not committed yet; the first CI build creates it.
 
 ## Attribution
+
+3D model: "Southwest Airlines Boeing 737" by A Random Modeler, <https://sketchfab.com/3d-models/southwest-airlines-boeing-737-73d0cd0c03594c5d9c53235d74b429bf>,
+licensed CC-BY-4.0 (<http://creativecommons.org/licenses/by/4.0/>). It was converted to the compact `assets/plane.bin`
+with `tools/bake_plane.py`.
 
 Map data © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright), schema © [OpenMapTiles](https://openmaptiles.org/),
 tiles served by [OpenFreeMap](https://openfreemap.org). Please keep the on-screen attribution in place.
