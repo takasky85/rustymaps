@@ -485,7 +485,8 @@ fn flat_circle(pr: &Projector, rect: egui::Rect, p: V3, r_px: f32, units_per_px:
     let s0 = at(p)?;
     let se = at(add(p, scale(east, eps)))?;
     let sn = at(add(p, scale(north, eps)))?;
-    let px_per_unit = ((s0.distance(se) + s0.distance(sn)) * 0.5) as f64 / eps;
+    // Size the circle by the less squashed direction, so it keeps its full width and only loses depth.
+    let px_per_unit = s0.distance(se).max(s0.distance(sn)) as f64 / eps;
     if px_per_unit <= 1e-9 {
         return None;
     }
