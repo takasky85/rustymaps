@@ -8,6 +8,7 @@
 mod camera;
 mod data;
 mod flight;
+mod fonts;
 mod gpu;
 mod json;
 mod mesh;
@@ -140,6 +141,7 @@ struct App {
     show_labels: bool,
     label_size: usize,
     label_bold: bool,
+    fonts: fonts::Fonts,
     show_compass: bool,
     // flights
     planes: Vec<Plane>,
@@ -167,6 +169,9 @@ impl App {
         let gpu_name = format!("{} ({:?})", info.name, info.backend);
         let srgb = rs.target_format.is_srgb();
         let tiles = TileManager::new(&cc.egui_ctx, rs.clone());
+        // Label font: one of the fonts already installed on this computer (switchable in the UI).
+        let fonts = fonts::Fonts::detect();
+        fonts.apply(&cc.egui_ctx);
 
         // Aircraft models and transit maps come from the offline data folder.
         let data_dir = data::data_dir();
@@ -206,6 +211,7 @@ impl App {
             show_labels: true,
             label_size: 1,
             label_bold: false,
+            fonts,
             show_compass: true,
             planes,
             speed: 2,
@@ -376,6 +382,22 @@ impl App {
                             }
                         });
                         ui.checkbox(&mut self.label_bold, "Bold labels");
+                        ui.horizontal(|ui| {
+                            ui.label("Label font");
+                            let names = self.fonts.names();
+                            let before = self.fonts.selected;
+                            egui::ComboBox::from_id_salt("label_font")
+                                .selected_text(names[self.fonts.selected.min(names.len() - 1)])
+                                .width(150.0)
+                                .show_ui(ui, |ui| {
+                                    for (i, n) in names.iter().enumerate() {
+                                        ui.selectable_value(&mut self.fonts.selected, i, *n);
+                                    }
+                                });
+                            if self.fonts.selected != before {
+                                self.fonts.apply(ctx);
+                            }
+                        });
                         ui.small("Styles are colour recreations of well-known OpenStreetMap looks on the same vector data.");
                     });
 
@@ -707,7 +729,7 @@ impl eframe::App for App {
 
             // --- labels ---
             if self.show_labels {
-                let ls = LabelStyle { scale: LABEL_SIZES[self.label_size].1, bold: self.label_bold, dark: self.palette.dark() };
+                let ls = LabelStyle { scale: LABEL_SIZES[self.label_size].1, bold: self.label_bold, dark: self.palette.dark(), family: fonts::Fonts::family() };
                 draw_labels(&painter, rect, &pr, zf, &frame_tiles.labels, extras, &ls);
             }
 
@@ -882,6 +904,7 @@ struct LabelStyle {
     scale: f32,
     bold: bool,
     dark: bool,
+    family: egui::FontFamily,
 }
 
 /// Places labels greedily by priority; a label that would overlap one already placed is dropped.
@@ -918,7 +941,7 @@ fn draw_labels(
         if placed.len() >= 220 {
             break;
         }
-        let font = egui::FontId::proportional(c.size * ls.scale);
+        let font = egui::FontId::new(c.size * ls.scale, ls.family.clone());
         let col = egui::Color32::from_rgb(c.color[0], c.color[1], c.color[2]);
         let halo = egui::Color32::from_rgb(c.halo[0], c.halo[1], c.halo[2]);
         let main = painter.layout_no_wrap(c.text.clone(), font.clone(), col);
