@@ -29,7 +29,7 @@ outline, white station circles with a dark ring (bigger at interchanges), letter
 Tokyo Metro / LA Metro / Muni line colours. They appear from zoom 8, stations from 10.5.
 
 The route data is downloaded once from the public Overpass API (one request per system, with an identifying
-`User-Agent`) and cached next to the tile cache for 30 days. Systems are plain entries in `src/transit_data.rs`
+`User-Agent`) and cached next to the tile cache for 30 days. If the public servers are overloaded, the app uses a snapshot from a `transit` folder next to the exe (the build workflow downloads one, with patient retries, and ships it in the zip); you can also make one yourself with `rustymaps.exe --fetch-transit <folder>`. Systems are plain entries in `src/transit_data.rs`
 (bounding box, OSM filters, standard line colours), so adding another city is one more entry.
 
 ## Flight simulation

@@ -64,6 +64,12 @@ fn select_adapter(adapters: &[wgpu::Adapter], surface: Option<&wgpu::Surface<'_>
 }
 
 fn main() -> eframe::Result {
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == "--fetch-transit") {
+        let dir = args.get(i + 1).map(String::as_str).unwrap_or("transit");
+        transit::fetch_to_dir(std::path::Path::new(dir));
+        return Ok(());
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 800.0]).with_title("RustyMaps"),
         renderer: eframe::Renderer::Wgpu,

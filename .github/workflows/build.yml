@@ -26,6 +26,17 @@ jobs:
           "Release build took $([math]::Round($sw.Elapsed.TotalSeconds)) s (exit $code)" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
           if ($code -ne 0) { exit $code }
 
+      # The public Overpass servers are often overloaded; the runner retries patiently and the
+      # result ships inside the zip (transit/*.json), so the app does not need to ask them itself.
+      - name: Fetch transit data
+        shell: pwsh
+        continue-on-error: true
+        timeout-minutes: 40
+        run: |
+          New-Item -ItemType Directory -Force transit-data | Out-Null
+          Start-Process -FilePath target/release/rustymaps.exe -ArgumentList "--fetch-transit","transit-data" -Wait -NoNewWindow
+          if (Test-Path transit-data/fetch.log) { Get-Content transit-data/fetch.log; Get-Content transit-data/fetch.log | Add-Content $env:GITHUB_STEP_SUMMARY }
+
       - name: Package
         shell: pwsh
         run: |
@@ -34,6 +45,7 @@ jobs:
           New-Item -ItemType Directory -Path dist/$name | Out-Null
           Copy-Item target/release/rustymaps.exe dist/$name/
           Copy-Item README.md dist/$name/
+          if (Test-Path transit-data) { Copy-Item transit-data dist/$name/transit -Recurse }
           Compress-Archive -Path dist/$name/* -DestinationPath "dist/$name.zip"
           "ZIP_NAME=$name.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
 

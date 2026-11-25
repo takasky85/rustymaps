@@ -104,7 +104,12 @@ fn load(i: usize, dir: &PathBuf) -> Result<SystemData, String> {
         .and_then(|t| SystemTime::now().duration_since(t).ok())
         .map_or(false, |age| age < CACHE_MAX_AGE);
     let cached = if fresh { std::fs::read_to_string(&path).ok() } else { None };
-    let (text, from_cache) = match cached {
+    // A snapshot shipped next to the program (see `--fetch-transit`) beats hammering the public servers.
+    let bundled = || {
+        let exe = std::env::current_exe().ok()?;
+        std::fs::read_to_string(exe.parent()?.join("transit").join(format!("{}.json", cfg.id))).ok()
+    };
+    let (text, from_cache) = match cached.or_else(bundled) {
         Some(t) => (t, true),
         None => (fetch(&transit_data::overpass_query(cfg))?, false),
     };
@@ -185,6 +190,44 @@ fn fetch(query: &str) -> Result<String, String> {
         }
     }
     Err(errors.join(" | "))
+}
+
+/// Headless mode (`rustymaps --fetch-transit <dir>`): downloads every system with patient retries and
+/// writes `<dir>/<id>.json` plus `<dir>/fetch.log`. Used by the build workflow so the download
+/// ships with the program, and handy to run by hand when the public servers are calmer.
+pub fn fetch_to_dir(dir: &std::path::Path) {
+    use std::io::Write;
+    let _ = std::fs::create_dir_all(dir);
+    let mut log = std::fs::File::create(dir.join("fetch.log")).ok();
+    let mut say = |msg: String| {
+        if let Some(f) = log.as_mut() {
+            let _ = writeln!(f, "{msg}");
+            let _ = f.flush();
+        }
+    };
+    for cfg in SYSTEMS.iter() {
+        let mut done = false;
+        for attempt in 1..=4 {
+            say(format!("{}: attempt {attempt}", cfg.id));
+            match fetch(&transit_data::overpass_query(cfg)) {
+                Ok(text) => match transit_data::parse(cfg, &text) {
+                    Ok(d) if !d.lines.is_empty() => {
+                        say(format!("{}: ok, {} lines, {} stations, {} bytes", cfg.id, d.lines.len(), d.stations.len(), text.len()));
+                        let _ = std::fs::write(dir.join(format!("{}.json", cfg.id)), text);
+                        done = true;
+                        break;
+                    }
+                    Ok(_) => say(format!("{}: answer contained no lines", cfg.id)),
+                    Err(e) => say(format!("{}: could not parse: {e}", cfg.id)),
+                },
+                Err(e) => say(format!("{}: {e}", cfg.id)),
+            }
+            std::thread::sleep(Duration::from_secs(45 * attempt));
+        }
+        if !done {
+            say(format!("{}: gave up", cfg.id));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
