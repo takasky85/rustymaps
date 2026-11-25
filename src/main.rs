@@ -160,6 +160,8 @@ struct App {
     map_dim: f32,
     flat_stations: bool,
     show_trains: bool,
+    /// Frame rate of animations (planes, trains) when nothing else is happening.
+    anim_fps: u32,
     /// 0 = smooth (supersampled) plane edges, 1 = fast.
     plane_quality: usize,
     /// Which tab of the control bar is open.
@@ -258,6 +260,7 @@ impl App {
             map_dim: 0.5,
             flat_stations: true,
             show_trains: true,
+            anim_fps: 60,
             plane_quality: 0,
             tab: None,
             search_text: String::new(),
@@ -428,14 +431,17 @@ impl eframe::App for App {
 
         let speed = SPEEDS[self.speed].1;
         let mut animating = false;
+        // Only planes that are switched on count: a hidden plane must not keep the whole map
+        // re-rendering. Animation is paced (not "as fast as the screen refreshes") to spare the GPU.
+        let frame = std::time::Duration::from_millis(1000 / self.anim_fps.max(1) as u64);
         for p in &mut self.planes {
-            if p.sim.playing {
+            if p.show && p.sim.playing {
                 p.sim.advance(dt.min(0.1), speed, p.route.duration_s());
                 animating = true;
             }
         }
         if animating {
-            ctx.request_repaint();
+            ctx.request_repaint_after(frame);
         }
         if self.step_fly(now) {
             ctx.request_repaint();
@@ -585,7 +591,7 @@ impl eframe::App for App {
                 transit::draw(&painter, rect, &self.cam, zf, &systems, &opts)
             };
             if out.animating {
-                ctx.request_repaint_after(std::time::Duration::from_millis(33));
+                ctx.request_repaint_after(frame);
             }
             let line_hit = out.hit;
             for l in out.labels {

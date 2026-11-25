@@ -75,6 +75,7 @@ impl App {
         s.set("plane_size", self.plane_size);
         s.set("exaggeration", self.exaggeration);
         s.set("plane_quality", self.plane_quality);
+        s.set("anim_fps", self.anim_fps);
         for p in &self.planes {
             s.set(&format!("plane_{}", p.def.model), p.show);
         }
@@ -122,6 +123,9 @@ impl App {
         }
         if let Some(v) = s.get::<usize>("speed") {
             self.speed = v.min(SPEEDS.len() - 1);
+        }
+        if let Some(v) = s.get::<u32>("anim_fps") {
+            self.anim_fps = v.clamp(10, 120);
         }
         if let Some(v) = s.get::<usize>("plane_quality") {
             self.plane_quality = v.min(1);

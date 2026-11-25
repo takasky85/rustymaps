@@ -344,6 +344,12 @@ impl App {
                 self.tiles.clear_cache();
             }
         });
+        ui.horizontal(|ui| {
+            ui.label("Animation rate");
+            ui.selectable_value(&mut self.anim_fps, 30, "30 fps (light)");
+            ui.selectable_value(&mut self.anim_fps, 60, "60 fps");
+        });
+        ui.small("The map only redraws when something changes; planes and trains pace themselves to this rate.");
         ui.separator();
         let t = |s: String| RichText::new(s).monospace().size(12.0);
         ui.label(t(format!("zoom {:.2}   tilt {:.0}°   rot {:.0}°", zf, self.cam.pitch.to_degrees(), self.cam.heading.to_degrees())));
