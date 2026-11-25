@@ -120,8 +120,33 @@ impl TransitManager {
             .iter()
             .zip(SYSTEMS)
             .filter(|(s, _)| s.enabled && s.offline)
-            .map(|(_, c)| Marker { pos: lonlat_to_vec(c.home.1.to_radians(), c.home.0.to_radians()), title: c.title })
+            .map(|(_, c)| Marker { pos: lonlat_to_vec(c.home.1.to_radians(), c.home.0.to_radians()), title: c.title, home: c.home })
             .collect()
+    }
+
+    /// Stations of the switched-on systems whose name contains `query` (case-insensitive):
+    /// (station name, system title, position). One entry per name and system.
+    pub fn find_stations(&self, query: &str, limit: usize) -> Vec<(String, &'static str, V3)> {
+        let q = query.trim().to_lowercase();
+        let mut out: Vec<(String, &'static str, V3)> = Vec::new();
+        if q.len() < 2 {
+            return out;
+        }
+        for (slot, cfg) in self.slots.iter().zip(SYSTEMS) {
+            let (true, Some(d)) = (slot.enabled, slot.data.as_ref()) else { continue };
+            for st in &d.stations {
+                if out.len() >= limit {
+                    return out;
+                }
+                if !st.name.is_empty()
+                    && st.name.to_lowercase().contains(&q)
+                    && !out.iter().any(|o| o.0 == st.name && o.1 == cfg.title)
+                {
+                    out.push((st.name.clone(), cfg.title, st.pos));
+                }
+            }
+        }
+        out
     }
 
     /// Data of all enabled, loaded systems.
@@ -291,6 +316,8 @@ pub fn fetch_to_dir(dir: &Path, only: &[String]) {
 pub struct Marker {
     pub pos: V3,
     pub title: &'static str,
+    /// (lat, lon) in degrees.
+    pub home: (f64, f64),
 }
 
 /// A station name that main's label placer should position and collision-check.
@@ -333,7 +360,12 @@ pub fn line_width(zf: f64) -> f32 {
 }
 
 fn fade(c: Color32, a: f32) -> Color32 {
-    Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), (c.a() as f32 * a).round() as u8)
+    let [r, g, b, al] = c.to_srgba_unmultiplied();
+    Color32::from_rgba_unmultiplied(r, g, b, (al as f32 * a).round().clamp(0.0, 255.0) as u8)
+}
+
+fn marker_radius(zf: f64) -> f32 {
+    lerp(zf, &[(2.0, 6.0), (5.0, 9.0), (9.0, 12.0)])
 }
 
 /// Metro symbols (a blue disc with an "M") for cities whose map is available. They fade out as the
@@ -344,7 +376,7 @@ pub fn draw_markers(painter: &egui::Painter, rect: egui::Rect, cam: &Camera, zf:
         return;
     }
     let pr = cam.projector(rect.width() as f64, rect.height() as f64);
-    let r = lerp(zf, &[(2.0, 6.0), (5.0, 9.0), (9.0, 12.0)]);
+    let r = marker_radius(zf);
     let blue = fade(Color32::from_rgb(20, 80, 190), a);
     let white = fade(Color32::WHITE, a);
     let shadow = fade(Color32::from_black_alpha(90), a);
@@ -467,18 +499,71 @@ fn flat_circle(pr: &Projector, rect: egui::Rect, p: V3, r_px: f32, units_per_px:
     Some(pts)
 }
 
+/// Everything `draw` needs besides the camera.
+pub struct Opts<'a> {
+    pub flat_stations: bool,
+    pub trains: bool,
+    /// Seconds, for moving the trains.
+    pub now: f64,
+    /// Where the user just clicked (screen position), to find which line was hit.
+    pub pick: Option<Pos2>,
+    /// The highlighted line: its system and its index there.
+    pub selected: Option<(&'a Arc<SystemData>, usize)>,
+}
+
+pub struct Out {
+    pub labels: Vec<StationLabel>,
+    /// The line under `pick`, if any.
+    pub hit: Option<(Arc<SystemData>, usize)>,
+    /// Trains are moving, so the caller should keep repainting.
+    pub animating: bool,
+}
+
+/// Simulated trains: not a timetable, just evenly spread trains shuttling along each line.
+const TRAIN_SPEED_MS: f64 = 200.0;
+const TRAIN_SPACING_KM: f64 = 2.5;
+const TRAINS_FROM: f64 = 10.0;
+const EARTH_RADIUS_M: f64 = 6_371_000.0;
+
+fn dist_to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
+    let ab = b - a;
+    let len2 = ab.length_sq();
+    let t = if len2 <= 1e-9 { 0.0 } else { ((p - a).dot(ab) / len2).clamp(0.0, 1.0) };
+    p.distance(a + ab * t)
+}
+
+fn dist_to_polyline(p: Pos2, pts: &[Pos2]) -> f32 {
+    pts.windows(2).map(|w| dist_to_segment(p, w[0], w[1])).fold(f32::INFINITY, f32::min)
+}
+
+/// Number of trains on a line of `len_rad` radians, and where train `k` of them is along a
+/// there-and-back trip at time `now` (arc length in radians, 0..=len).
+fn train_s(len_rad: f64, n: usize, k: usize, now: f64) -> f64 {
+    let speed = TRAIN_SPEED_MS / EARTH_RADIUS_M;
+    let u = ((k as f64 + 0.37) / n as f64 * 2.0 * len_rad + now * speed).rem_euclid(2.0 * len_rad);
+    if u < len_rad {
+        u
+    } else {
+        2.0 * len_rad - u
+    }
+}
+
+fn train_count(len_rad: f64) -> usize {
+    ((len_rad * EARTH_RADIUS_M / 1000.0 / TRAIN_SPACING_KM).round() as usize).clamp(2, 14)
+}
+
 pub fn draw(
     painter: &egui::Painter,
     rect: egui::Rect,
     cam: &Camera,
     zf: f64,
     systems: &[Arc<SystemData>],
-    flat_stations: bool,
-) -> Vec<StationLabel> {
-    let mut labels = Vec::new();
+    o: &Opts,
+) -> Out {
+    let mut out = Out { labels: Vec::new(), hit: None, animating: false };
     let fade_a = map_fade(zf);
     if fade_a <= 0.01 || systems.is_empty() {
-        return labels;
+        return out;
     }
     let (w, h) = (rect.width() as f64, rect.height() as f64);
     let pr = cam.projector(w, h);
@@ -491,17 +576,20 @@ pub fn draw(
     let on_screen = rect.expand(80.0);
 
     let line_w = line_width(zf);
-    let casing = fade(Color32::from_rgba_unmultiplied(255, 255, 255, 240), fade_a);
     let casing_extra = (line_w * 0.28).clamp(1.5, 4.0);
     let ink = Color32::from_rgb(35, 35, 45);
-    let mut stations: Vec<(Pos2, &transit_data::Station)> = Vec::new();
-    let flat = flat_stations && cam.pitch > 0.12;
+    let flat = o.flat_stations && cam.pitch > 0.12;
     let units_per_px = 2.0 * cam.alt * (FOV_Y * 0.5).tan() / h;
+    let mut stations: Vec<(Pos2, &transit_data::Station)> = Vec::new();
+    let mut trains: Vec<(Pos2, Color32)> = Vec::new();
+    let mut best_hit: Option<(f32, Arc<SystemData>, usize)> = None;
+    let train_a = (((zf - TRAINS_FROM) / 1.0).clamp(0.0, 1.0) as f32) * fade_a;
 
     for sys in systems {
         if !may_be_visible(cam, sys, w / h) {
             continue;
         }
+        let sel = o.selected.and_then(|(a, i)| Arc::ptr_eq(a, sys).then_some(i));
         // 1. Project every path into on-screen runs.
         let mut runs: Vec<(usize, Vec<Pos2>)> = Vec::new();
         for (li, line) in sys.lines.iter().enumerate() {
@@ -538,19 +626,38 @@ pub fn draw(
             egui::Rect::from_min_max(lo, hi).intersects(on_screen)
         });
 
-        // 2. All white casings first, then all colours: crossings look like a drawn map.
-        for (_, r) in &runs {
-            painter.add(egui::Shape::line(r.clone(), Stroke::new(line_w + casing_extra, casing)));
+        // Which line was clicked?
+        if let Some(pick) = o.pick {
+            for (li, r) in &runs {
+                let d = dist_to_polyline(pick, r);
+                if d <= (line_w * 0.5 + 6.0).max(8.0) && best_hit.as_ref().map_or(true, |b| d < b.0) {
+                    best_hit = Some((d, sys.clone(), *li));
+                }
+            }
         }
+
+        // 2. All white casings first, then all colours: crossings look like a drawn map. With a line
+        //    highlighted the others step back and the chosen one is drawn fatter, on top.
+        let alpha_of = |li: usize| if sel.map_or(false, |s| s != li) { fade_a * 0.22 } else { fade_a };
+        let width_of = |li: usize| if sel == Some(li) { line_w * 1.5 } else { line_w };
         for (li, r) in &runs {
-            let c = sys.lines[*li].color;
-            painter.add(egui::Shape::line(r.clone(), Stroke::new(line_w, fade(Color32::from_rgb(c[0], c[1], c[2]), fade_a))));
+            let casing = fade(Color32::from_rgba_unmultiplied(255, 255, 255, 240), alpha_of(*li));
+            painter.add(egui::Shape::line(r.clone(), Stroke::new(width_of(*li) + casing_extra, casing)));
+        }
+        for pass in 0..2 {
+            for (li, r) in &runs {
+                if (sel == Some(*li)) != (pass == 1) {
+                    continue;
+                }
+                let c = sys.lines[*li].color;
+                painter.add(egui::Shape::line(r.clone(), Stroke::new(width_of(*li), fade(Color32::from_rgb(c[0], c[1], c[2]), alpha_of(*li)))));
+            }
         }
 
         // 3. Roundels at the ends of each line's longest stretch.
         if zf >= ROUNDELS_FROM {
             let rr = lerp(zf, &[(10.5, 8.0), (12.0, 10.5), (16.0, 13.0)]);
-            for line in &sys.lines {
+            for (li, line) in sys.lines.iter().enumerate() {
                 if line.badge.is_empty() {
                     continue;
                 }
@@ -560,8 +667,32 @@ pub fn draw(
                     if let Some(s) = to_screen(p) {
                         if on_screen.contains(s) {
                             let c = line.color;
-                            painter.circle(s, rr, Color32::from_rgb(c[0], c[1], c[2]), Stroke::new(2.0_f32, Color32::WHITE));
-                            painter.text(s, Align2::CENTER_CENTER, &line.badge, FontId::proportional(rr * 1.05), Color32::WHITE);
+                            let a = alpha_of(li);
+                            painter.circle(s, rr, fade(Color32::from_rgb(c[0], c[1], c[2]), a), Stroke::new(2.0_f32, fade(Color32::WHITE, a)));
+                            painter.text(s, Align2::CENTER_CENTER, &line.badge, FontId::proportional(rr * 1.05), fade(Color32::WHITE, a));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Trains (drawn after the station circles, below).
+        if o.trains && train_a > 0.02 {
+            for (li, line) in sys.lines.iter().enumerate() {
+                if sel.map_or(false, |s| s != li) {
+                    continue;
+                }
+                let len = line.track.length();
+                if len <= 0.0 {
+                    continue;
+                }
+                let n = train_count(len);
+                let c = line.color;
+                for k in 0..n {
+                    let Some(p) = line.track.point_at(&line.paths, train_s(len, n, k, o.now)) else { continue };
+                    if let Some(s) = to_screen(p) {
+                        if on_screen.contains(s) {
+                            trains.push((s, fade(Color32::from_rgb(c[0], c[1], c[2]), train_a)));
                         }
                     }
                 }
@@ -578,6 +709,7 @@ pub fn draw(
             }
         }
     }
+    out.hit = best_hit.map(|(_, a, i)| (a, i));
 
     // 4. Stations: a circle only where there is room for it, a name only where there is room to read it.
     if !stations.is_empty() {
@@ -601,11 +733,34 @@ pub fn draw(
                 }
             }
             if !st.name.is_empty() && gap >= MIN_NAME_GAP {
-                labels.push(StationLabel { at: *s + egui::vec2(0.0, -(rr + 10.0)), text: st.name.clone(), interchange: inter });
+                out.labels.push(StationLabel { at: *s + egui::vec2(0.0, -(rr + 10.0)), text: st.name.clone(), interchange: inter });
             }
         }
     }
-    labels
+
+    // 5. Trains on top: a white dot ringed in the line colour.
+    if !trains.is_empty() {
+        let r = (line_w * 0.55).clamp(3.5, 8.0);
+        for (s, col) in trains {
+            painter.circle(s, r, fade(Color32::WHITE, train_a), Stroke::new(2.4_f32, col));
+        }
+        out.animating = true;
+    }
+    out
+}
+
+/// The metro symbol under a screen position, if one is showing there.
+pub fn marker_at(cam: &Camera, rect: egui::Rect, zf: f64, markers: &[Marker], at: Pos2) -> Option<usize> {
+    let a = (1.0 - map_fade(zf)) * (((zf - 2.0) / 1.0).clamp(0.0, 1.0) as f32);
+    if a < 0.3 {
+        return None;
+    }
+    let pr = cam.projector(rect.width() as f64, rect.height() as f64);
+    let r = marker_radius(zf) + 4.0;
+    markers.iter().position(|m| {
+        pr.visible(m.pos)
+            && pr.project(m.pos).map_or(false, |s| (rect.min + egui::vec2(s[0] as f32, s[1] as f32)).distance(at) <= r)
+    })
 }
 
 #[cfg(test)]
@@ -659,5 +814,29 @@ mod tests {
         cam.pitch = 1.1;
         let (a, b) = size(&cam);
         assert!(b < a * 0.6 && (a - 40.0).abs() < 4.0, "{a} x {b}");
+    }
+
+    #[test]
+    fn trains_shuttle_end_to_end_and_are_spread_out() {
+        let len = 0.001; // about 6 km
+        let n = train_count(len);
+        assert!((2..=14).contains(&n));
+        for step in 0..200 {
+            for k in 0..n {
+                let s = train_s(len, n, k, step as f64 * 7.0);
+                assert!((0.0..=len).contains(&s), "{s}");
+            }
+        }
+        let a = train_s(len, n, 0, 0.0);
+        let b = train_s(len, n, 1, 0.0);
+        assert!((a - b).abs() > 1e-6, "trains must not sit on top of each other");
+    }
+
+    #[test]
+    fn clicking_near_a_line_finds_it() {
+        let pts = [Pos2::new(0.0, 0.0), Pos2::new(100.0, 0.0), Pos2::new(100.0, 100.0)];
+        assert!((dist_to_polyline(Pos2::new(50.0, 4.0), &pts) - 4.0).abs() < 1e-4);
+        assert!((dist_to_polyline(Pos2::new(104.0, 50.0), &pts) - 4.0).abs() < 1e-4);
+        assert!(dist_to_polyline(Pos2::new(50.0, 40.0), &pts) > 30.0);
     }
 }

@@ -14,24 +14,27 @@ mod json;
 mod mesh;
 mod mvt;
 mod plane;
+mod search;
+mod settings;
 mod style;
 mod tile_id;
 mod tiles;
 mod transit;
 mod transit_data;
+mod ui;
 
 use std::sync::Arc;
 
 use eframe::{egui, egui_wgpu, wgpu};
 
-use camera::{dot, merc_to_vec, Camera, Projector, MAX_ALT, MAX_PITCH, MIN_ALT, V3};
+use camera::{dot, merc_to_vec, Camera, Projector, MAX_ALT, MIN_ALT, V3};
 use flight::{AircraftDef, Route, Sim, AIRCRAFT};
 use gpu::{Globals, MapCallback};
 use plane::{PlaneCallback, PlaneDraw};
 use style::Palette;
 use tiles::TileManager;
-use transit::{StationLabel, Status, TransitManager};
-use transit_data::SYSTEMS;
+use transit::{StationLabel, TransitManager};
+use transit_data::{SystemData, SYSTEMS};
 
 const SF_LON: f64 = -122.4194;
 const SF_LAT: f64 = 37.7749;
@@ -156,6 +159,19 @@ struct App {
     transit_focus: bool,
     map_dim: f32,
     flat_stations: bool,
+    show_trains: bool,
+    /// 0 = smooth (supersampled) plane edges, 1 = fast.
+    plane_quality: usize,
+    /// Which tab of the control bar is open.
+    tab: Option<ui::Tab>,
+    search_text: String,
+    search: search::Search,
+    local_hits: Vec<search::Hit>,
+    search_open: bool,
+    /// The highlighted subway line: its system and the line's index in it.
+    selected_line: Option<(Arc<SystemData>, usize)>,
+    saved_settings: String,
+    saved_at: f64,
 }
 
 /// How route lines are drawn (adjustable in the Flights section).
@@ -211,7 +227,7 @@ impl App {
             }
         }
 
-        App {
+        let mut app = App {
             cam: Camera::from_degrees(-115.0, 32.0, 2.2),
             transit,
             tiles,
@@ -241,7 +257,21 @@ impl App {
             transit_focus: true,
             map_dim: 0.5,
             flat_stations: true,
-        }
+            show_trains: true,
+            plane_quality: 0,
+            tab: None,
+            search_text: String::new(),
+            search: search::Search::default(),
+            local_hits: Vec::new(),
+            search_open: false,
+            selected_line: None,
+            saved_settings: String::new(),
+            saved_at: 0.0,
+        };
+        // Settings from the last run (kept in the user data folder, so they survive new builds).
+        app.apply_settings(&settings::Store::load(), &cc.egui_ctx);
+        app.saved_settings = app.settings_text();
+        app
     }
 
     /// Smooth move to `to`. Far destinations zoom out towards a globe view first and zoom back in
@@ -256,7 +286,12 @@ impl App {
     }
 
     fn goto_city(&mut self, lon: f64, lat: f64, now: f64) {
-        let alt = Camera::alt_for_zoom(CITY_ZOOM, lat.to_radians(), self.view_h);
+        self.goto_zoom(lon, lat, CITY_ZOOM, now);
+    }
+
+    /// Fly to a place (degrees) at a zoom level, keeping the tilt and rotation.
+    fn goto_zoom(&mut self, lon: f64, lat: f64, zoom: f64, now: f64) {
+        let alt = Camera::alt_for_zoom(zoom, lat.to_radians(), self.view_h);
         let mut to = Camera::from_degrees(lon, lat, alt);
         to.pitch = self.cam.pitch;
         to.heading = self.cam.heading;
@@ -319,234 +354,6 @@ impl App {
         self.cam.normalize();
     }
 
-    fn controls(&mut self, ctx: &egui::Context, rect: egui::Rect, now: f64, zf: f64) {
-        let t = |s: String| egui::RichText::new(s).monospace().size(12.0);
-        egui::Window::new("RustyMaps")
-            .default_pos(rect.min + egui::vec2(10.0, 10.0))
-            .default_width(290.0)
-            .resizable(false)
-            .show(ctx, |ui| {
-                egui::ScrollArea::vertical().max_height((rect.height() - 90.0).max(200.0)).auto_shrink([true, true]).show(ui, |ui| {
-                    ui.label(t(format!(
-                        "{:.0} fps   zoom {:.2}   tilt {:.0}°   rot {:.0}°",
-                        self.fps,
-                        zf,
-                        self.cam.pitch.to_degrees(),
-                        self.cam.heading.to_degrees()
-                    )));
-                    ui.label(t(format!("{:.4}°, {:.4}°", self.cam.lat.to_degrees(), self.cam.lon.to_degrees())));
-                    ui.label(t(format!(
-                        "tiles: {} drawn, {} cached, {} loading{}",
-                        self.stats.drawn,
-                        self.stats.loaded,
-                        self.stats.pending,
-                        if self.stats.failed > 0 { format!(", {} retrying", self.stats.failed) } else { String::new() }
-                    )));
-                    ui.label(t(format!("GPU: {}", self.gpu_name)));
-                    ui.small("left-drag: move   Shift/Ctrl+drag: slide the globe on screen   right/middle-drag: tilt + rotate   wheel: zoom   double-click: zoom in   R: reset");
-
-                    egui::CollapsingHeader::new("View").default_open(true).show(ui, |ui| {
-                        let mut tilt = self.cam.pitch.to_degrees();
-                        if ui.add(egui::Slider::new(&mut tilt, 0.0..=MAX_PITCH.to_degrees()).text("Tilt °")).changed() {
-                            self.cam.pitch = tilt.to_radians();
-                            self.fly = None;
-                        }
-                        let mut rot = self.cam.heading.to_degrees();
-                        if ui.add(egui::Slider::new(&mut rot, -180.0..=180.0).text("Rotate °")).changed() {
-                            self.cam.heading = rot.to_radians();
-                            self.fly = None;
-                        }
-                        ui.horizontal_wrapped(|ui| {
-                            if ui.button("Reset view").on_hover_text("north up, looking straight down (R)").clicked() {
-                                self.reset_orientation(now);
-                            }
-                            if ui.button("Globe").clicked() {
-                                let mut to = self.cam;
-                                to.alt = 2.2;
-                                to.pitch = 0.0;
-                                to.heading = 0.0;
-                                self.fly_to(to, now, 2.5);
-                            }
-                            if ui.button("Clear cache").clicked() {
-                                self.tiles.clear_cache();
-                            }
-                        });
-                        ui.checkbox(&mut self.show_compass, "Compass");
-                        ui.horizontal(|ui| {
-                            ui.label("Go to");
-                            egui::ComboBox::from_id_salt("goto").selected_text("choose a city…").show_ui(ui, |ui| {
-                                if ui.selectable_label(false, "San Francisco").clicked() {
-                                    self.goto_city(SF_LON, SF_LAT, now);
-                                }
-                                for sys in SYSTEMS.iter() {
-                                    if ui.selectable_label(false, sys.title).clicked() {
-                                        self.goto_city(sys.home.1, sys.home.0, now);
-                                    }
-                                }
-                            });
-                        });
-                    });
-
-                    egui::CollapsingHeader::new("Map style & labels").default_open(true).show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label("Style");
-                            egui::ComboBox::from_id_salt("palette").selected_text(self.palette.name()).width(190.0).show_ui(ui, |ui| {
-                                for p in Palette::all() {
-                                    ui.selectable_value(&mut self.palette, p, p.name());
-                                }
-                            });
-                        });
-                        ui.checkbox(&mut self.show_labels, "Show labels");
-                        ui.horizontal(|ui| {
-                            for (i, (name, _)) in LABEL_SIZES.iter().enumerate() {
-                                ui.radio_value(&mut self.label_size, i, *name);
-                            }
-                        });
-                        ui.checkbox(&mut self.label_bold, "Bold labels");
-                        ui.horizontal(|ui| {
-                            ui.label("Label font");
-                            let names = self.fonts.names();
-                            let before = self.fonts.selected;
-                            egui::ComboBox::from_id_salt("label_font")
-                                .selected_text(names[self.fonts.selected.min(names.len() - 1)])
-                                .width(150.0)
-                                .show_ui(ui, |ui| {
-                                    for (i, n) in names.iter().enumerate() {
-                                        ui.selectable_value(&mut self.fonts.selected, i, *n);
-                                    }
-                                });
-                            if self.fonts.selected != before {
-                                self.fonts.apply(ctx);
-                            }
-                        });
-                        ui.checkbox(&mut self.transit_focus, "Transit focus: only subway labels, dimmed map");
-                        if self.transit_focus {
-                            ui.add(egui::Slider::new(&mut self.map_dim, 0.0..=0.85).text("Dim"));
-                        }
-                        ui.checkbox(&mut self.flat_stations, "Station circles lie flat when tilted");
-                        ui.small("Styles are colour recreations of well-known OpenStreetMap looks on the same vector data.");
-                    });
-
-                    egui::CollapsingHeader::new(format!("Transit maps ({})", SYSTEMS.len())).default_open(false).show(ui, |ui| {
-                        for (i, sys) in SYSTEMS.iter().enumerate() {
-                            let mut on = self.transit.enabled(i);
-                            ui.horizontal(|ui| {
-                                if ui.checkbox(&mut on, sys.title).changed() {
-                                    self.transit.set_enabled(i, on);
-                                }
-                                match self.transit.status(i) {
-                                    Status::Loading => {
-                                        ui.spinner();
-                                    }
-                                    Status::Failed(_) => {
-                                        ui.colored_label(egui::Color32::LIGHT_RED, "failed");
-                                    }
-                                    _ => {
-                                        if !self.transit.offline(i) && !on {
-                                            ui.weak("download");
-                                        }
-                                    }
-                                }
-                            });
-                            if let Status::Failed(e) = self.transit.status(i) {
-                                ui.small(egui::RichText::new(e).color(egui::Color32::LIGHT_RED));
-                            }
-                        }
-                        ui.small(format!(
-                            "Each city with a saved map shows a metro symbol; the lines fade in from zoom {:.0}, and station circles and names appear once there is room for them. Saved maps are read from {}",
-                            transit::MAP_FROM,
-                            self.transit.dir().join("transit").display()
-                        ));
-                    });
-
-                    egui::CollapsingHeader::new("Flights").default_open(true).show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            egui::ComboBox::from_id_salt("speed").selected_text(SPEEDS[self.speed].0).show_ui(ui, |ui| {
-                                for (i, (name, _)) in SPEEDS.iter().enumerate() {
-                                    ui.selectable_value(&mut self.speed, i, *name);
-                                }
-                            });
-                            if ui.button("▶ all").clicked() {
-                                for p in &mut self.planes {
-                                    p.sim.playing = true;
-                                }
-                            }
-                            if ui.button("⏸ all").clicked() {
-                                for p in &mut self.planes {
-                                    p.sim.playing = false;
-                                }
-                            }
-                        });
-                        ui.add(egui::Slider::new(&mut self.plane_size, 1.0..=20000.0).logarithmic(true).text("Size ×"));
-                        ui.add(egui::Slider::new(&mut self.exaggeration, 1.0..=150.0).logarithmic(true).text("Altitude ×"));
-                        ui.horizontal(|ui| {
-                            ui.label("Route lines");
-                            ui.color_edit_button_srgb(&mut self.route_color);
-                        });
-                        ui.add(egui::Slider::new(&mut self.route_alpha, 0.1..=1.0).text("Opacity"));
-                        ui.add(egui::Slider::new(&mut self.route_width, 1.0..=10.0).text("Width"));
-                        ui.checkbox(&mut self.route_at_altitude, "Route line at plane altitude");
-                        if !self.model_errors.is_empty() {
-                            ui.colored_label(egui::Color32::LIGHT_RED, "Some aircraft models were not found:");
-                            for e in &self.model_errors {
-                                ui.small(egui::RichText::new(e).color(egui::Color32::LIGHT_RED));
-                            }
-                            ui.small(format!("Put the data folder next to the program or at {}", self.data_dir.display()));
-                        }
-                        let mut look: Option<usize> = None;
-                        for i in 0..self.planes.len() {
-                            ui.separator();
-                            let p = &mut self.planes[i];
-                            let st = p.sim.state(&p.route);
-                            ui.horizontal(|ui| {
-                                ui.checkbox(&mut p.show, format!("{}  {} → {}", p.def.label, p.def.from.0, p.def.to.0));
-                            });
-                            ui.horizontal(|ui| {
-                                if ui.button(if p.sim.playing { "⏸" } else { "▶" }).clicked() {
-                                    p.sim.playing = !p.sim.playing;
-                                }
-                                if ui.button("⏮").on_hover_text("back to the start").clicked() {
-                                    p.sim.set_t(0.0);
-                                    p.sim.outbound = true;
-                                }
-                                if ui.button("Look at").clicked() {
-                                    look = Some(i);
-                                }
-                                let mut f = self.follow == Some(i);
-                                if ui.checkbox(&mut f, "Follow").changed() {
-                                    self.follow = if f { Some(i) } else { None };
-                                }
-                            });
-                            ui.spacing_mut().slider_width = 230.0;
-                            let mut tt = p.sim.t;
-                            if ui.add(egui::Slider::new(&mut tt, 0.0..=1.0).show_value(false)).changed() {
-                                p.sim.set_t(tt);
-                            }
-                            let status = if p.sim.pause > 0.0 {
-                                "turning around"
-                            } else if p.sim.outbound {
-                                "outbound"
-                            } else {
-                                "returning"
-                            };
-                            ui.label(t(format!(
-                                "{:.0}%  {:.1} h  {:.0} ft  {}",
-                                p.sim.t * 100.0,
-                                p.sim.t * p.route.duration_s() / 3600.0,
-                                st.alt_m / 0.3048,
-                                status
-                            )));
-                        }
-                        if let Some(i) = look {
-                            self.planes[i].show = true;
-                            self.look_at_plane(i, now);
-                        }
-                        ui.small("Aircraft shuttle between their airports until paused. Altitude × lifts them above the ground so they read as flying.");
-                    });
-                });
-            });
-    }
-
     /// The compass rose (bottom right): points to north, click to put north back up.
     fn compass(&mut self, ctx: &egui::Context, now: f64) {
         let heading = self.cam.heading as f32;
@@ -599,6 +406,12 @@ impl App {
     }
 }
 
+/// Zoom level at which a place `span_rad` radians across fills the view comfortably.
+fn zoom_for_span(span_rad: f64, lat_rad: f64, view_h: f64) -> f64 {
+    let span = (span_rad * 1.3).max(1e-6);
+    (2.0 * std::f64::consts::PI * lat_rad.cos().max(0.05) * view_h / (512.0 * span)).log2().clamp(2.5, 17.5)
+}
+
 fn vec_lon_lat(p: V3) -> (f64, f64) {
     camera::vec_to_lonlat(p)
 }
@@ -611,6 +424,7 @@ impl eframe::App for App {
             self.fps = self.fps * 0.9 + (1.0 / dt) * 0.1;
         }
         self.transit.poll();
+        self.search.poll();
 
         let speed = SPEEDS[self.speed].1;
         let mut animating = false;
@@ -633,6 +447,11 @@ impl eframe::App for App {
                 self.cam.lat = lat;
                 self.cam.normalize();
             }
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.selected_line = None;
+            self.tab = None;
+            self.search_open = false;
         }
         if ctx.input(|i| i.key_pressed(egui::Key::R)) && !ctx.wants_keyboard_input() {
             self.reset_orientation(now);
@@ -746,10 +565,43 @@ impl eframe::App for App {
                 painter.rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(12, 14, 22, a));
             }
             draw_routes(&painter, rect, &pr, &self.planes, &rs, &mut extras);
-            for l in transit::draw(&painter, rect, &self.cam, zf, &systems, self.flat_stations) {
+            // A click may hit a metro symbol (fly to that city) or a subway line (highlight it).
+            let click = if resp.clicked() { resp.interact_pointer_pos() } else { None };
+            let markers = self.transit.markers();
+            let marker_click = click.and_then(|p| transit::marker_at(&self.cam, rect, zf, &markers, p));
+            if let Some(p) = resp.hover_pos() {
+                if transit::marker_at(&self.cam, rect, zf, &markers, p).is_some() {
+                    ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+            }
+            let out = {
+                let opts = transit::Opts {
+                    flat_stations: self.flat_stations,
+                    trains: self.show_trains,
+                    now,
+                    pick: if marker_click.is_none() { click } else { None },
+                    selected: self.selected_line.as_ref().map(|(a, i)| (a, *i)),
+                };
+                transit::draw(&painter, rect, &self.cam, zf, &systems, &opts)
+            };
+            if out.animating {
+                ctx.request_repaint_after(std::time::Duration::from_millis(33));
+            }
+            let line_hit = out.hit;
+            for l in out.labels {
                 extras.push(Cand::from_station(l));
             }
-            transit::draw_markers(&painter, rect, &self.cam, zf, &self.transit.markers());
+            transit::draw_markers(&painter, rect, &self.cam, zf, &markers);
+            if let Some(mi) = marker_click {
+                let (lat, lon) = markers[mi].home;
+                self.goto_city(lon, lat, now);
+            } else if click.is_some() {
+                if line_hit.is_none() {
+                    self.tab = None;
+                    self.search_open = false;
+                }
+                self.selected_line = line_hit;
+            }
             let mut draws: Vec<PlaneDraw> = Vec::new();
             for (i, p) in self.planes.iter().enumerate() {
                 let (true, Some(radius)) = (p.show, p.radius_m) else { continue };
@@ -768,6 +620,7 @@ impl eframe::App for App {
                         draws,
                         srgb: self.srgb,
                         viewport_px: [(w as f32 * ppp) as u32, (h as f32 * ppp) as u32],
+                        supersample: self.plane_quality == 0,
                     },
                 ));
             }
@@ -777,6 +630,19 @@ impl eframe::App for App {
                 let ls = LabelStyle { scale: LABEL_SIZES[self.label_size].1, bold: self.label_bold, dark: self.palette.dark(), family: fonts::Fonts::family() };
                 let map_labels = if focus > 0.5 { &frame_tiles.labels[..0] } else { &frame_tiles.labels[..] };
                 draw_labels(&painter, rect, &pr, zf, map_labels, extras, &ls);
+            }
+
+            // --- name of the highlighted subway line ---
+            if let Some((sys, li)) = &self.selected_line {
+                if let Some(line) = sys.lines.get(*li) {
+                    let text = if line.badge.is_empty() { line.name.clone() } else { format!("{}   {}", line.badge, line.name) };
+                    let galley = painter.layout_no_wrap(text, egui::FontId::proportional(15.0), egui::Color32::WHITE);
+                    let r = egui::Rect::from_center_size(rect.center_bottom() - egui::vec2(0.0, 44.0), galley.size()).expand2(egui::vec2(12.0, 6.0));
+                    let c = line.color;
+                    painter.rect_filled(r, 14.0, egui::Color32::from_rgb(c[0] / 2, c[1] / 2, c[2] / 2));
+                    painter.rect_stroke(r, 14.0, egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(c[0], c[1], c[2])), egui::StrokeKind::Inside);
+                    painter.galley(r.center() - galley.size() * 0.5, galley, egui::Color32::WHITE);
+                }
             }
 
             // --- attribution (required by the map data licences) ---
@@ -802,6 +668,20 @@ impl eframe::App for App {
             self.compass(ctx, now);
         }
         self.controls(ctx, rect_for_ui, now, zf_for_ui);
+
+        if now - self.saved_at > 1.0 {
+            self.saved_at = now;
+            let text = self.settings_text();
+            if text != self.saved_settings {
+                let path = settings::path();
+                if let Some(dir) = path.parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                if std::fs::write(&path, &text).is_ok() {
+                    self.saved_settings = text;
+                }
+            }
+        }
     }
 }
 

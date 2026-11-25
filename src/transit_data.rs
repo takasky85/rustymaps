@@ -212,6 +212,35 @@ pub struct TLine {
     pub color: [u8; 3],
     /// Unit-sphere polylines following the real track.
     pub paths: Vec<Vec<V3>>,
+    /// Distances along the line's main path, for moving trains (filled in by `finish`).
+    pub track: Track,
+}
+
+/// Cumulative arc length (radians) along `paths[path]`.
+#[derive(Default)]
+pub struct Track {
+    pub path: usize,
+    pub cum: Vec<f64>,
+}
+
+impl Track {
+    /// The point at arc length `s` along the track (clamped to its ends).
+    pub fn point_at(&self, paths: &[Vec<V3>], s: f64) -> Option<V3> {
+        let path = paths.get(self.path)?;
+        if self.cum.len() < 2 || self.cum.len() != path.len() {
+            return None;
+        }
+        let i = self.cum.partition_point(|&c| c < s).clamp(1, self.cum.len() - 1);
+        let (a, b) = (i - 1, i);
+        let span = (self.cum[b] - self.cum[a]).max(1e-15);
+        let t = ((s - self.cum[a]) / span).clamp(0.0, 1.0);
+        let (p, q) = (path[a], path[b]);
+        Some(crate::camera::normalize([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t, p[2] + (q[2] - p[2]) * t]))
+    }
+
+    pub fn length(&self) -> f64 {
+        self.cum.last().copied().unwrap_or(0.0)
+    }
 }
 
 pub struct Station {
@@ -233,6 +262,19 @@ pub struct SystemData {
 impl SystemData {
     /// Computes `center` and `radius`; call after the lines are filled in.
     pub fn finish(&mut self) {
+        // The main path of each line (the one the end-of-line roundels sit on) is where trains run.
+        for line in &mut self.lines {
+            let Some((pi, path)) = line.paths.iter().enumerate().max_by_key(|(_, p)| p.len()) else { continue };
+            let mut cum = Vec::with_capacity(path.len());
+            let mut acc = 0.0f64;
+            for (k, p) in path.iter().enumerate() {
+                if k > 0 {
+                    acc += dot(path[k - 1], *p).clamp(-1.0, 1.0).acos();
+                }
+                cum.push(acc);
+            }
+            line.track = Track { path: pi, cum };
+        }
         let mut sum = [0.0f64; 3];
         let mut n = 0usize;
         for p in self.lines.iter().flat_map(|l| l.paths.iter()).flat_map(|p| p.iter().step_by(4)) {
@@ -374,7 +416,7 @@ pub fn decode(bytes: &[u8]) -> Result<SystemData, String> {
             }
             paths.push(p);
         }
-        d.lines.push(TLine { name, badge, color, paths });
+        d.lines.push(TLine { name, badge, color, paths, track: Track::default() });
     }
     for _ in 0..r.u32()? {
         let name = r.string()?;
@@ -647,7 +689,7 @@ pub fn parse(cfg: &SystemConfig, text: &str) -> Result<SystemData, String> {
     for a in accs {
         let paths: Vec<Vec<V3>> =
             chain(a.ways).into_iter().map(|w| w.into_iter().map(to_v3).collect()).collect();
-        data.lines.push(TLine { name: a.name, badge: a.badge, color: a.color, paths });
+        data.lines.push(TLine { name: a.name, badge: a.badge, color: a.color, paths, track: Track::default() });
     }
 
     // Stations: merge platform pairs / duplicate stops of the same name that sit close together.
@@ -669,6 +711,7 @@ pub fn parse(cfg: &SystemConfig, text: &str) -> Result<SystemData, String> {
             None => data.stations.push(Station { name, pos, lines: vec![line] }),
         }
     }
+    data.finish();
     Ok(data)
 }
 
@@ -785,5 +828,18 @@ mod tests {
         assert_eq!(d.stations.iter().filter(|s| s.name == "Shibuya").count(), 1);
         // Asakusa has only a Japanese name: kept as an unnamed dot
         assert!(d.stations.iter().any(|s| s.name.is_empty() && s.lines == vec![0]));
+    }
+
+    #[test]
+    fn trains_can_be_placed_along_a_line() {
+        let d = parse(&SYSTEMS[2], SAMPLE).unwrap();
+        let line = &d.lines[0];
+        let len = line.track.length();
+        assert!(len > 0.0);
+        let a = line.track.point_at(&line.paths, 0.0).unwrap();
+        let b = line.track.point_at(&line.paths, len).unwrap();
+        let mid = line.track.point_at(&line.paths, len * 0.5).unwrap();
+        assert!(dot(a, mid) < 1.0 && dot(mid, b) < 1.0);
+        assert!(d.radius > 0.0, "a freshly parsed system must be ready to draw");
     }
 }

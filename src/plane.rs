@@ -271,6 +271,7 @@ impl PlaneGpu {
         draws: &[PlaneDraw],
         srgb: bool,
         viewport_px: [u32; 2],
+        supersample: bool,
     ) {
         self.active = false;
         self.draws.clear();
@@ -279,7 +280,7 @@ impl PlaneGpu {
             return;
         }
         // Supersample 2x for smooth edges unless the screen is already huge.
-        let ss = if (viewport_px[0] as u64) * (viewport_px[1] as u64) <= 2_600_000 { 2 } else { 1 };
+        let ss = if supersample && (viewport_px[0] as u64) * (viewport_px[1] as u64) <= 2_600_000 { 2 } else { 1 };
         let limit = device.limits().max_texture_dimension_2d;
         let size = ((viewport_px[0] * ss).min(limit), (viewport_px[1] * ss).min(limit));
         if self.target.as_ref().map_or(true, |t| t.size != size) {
@@ -352,6 +353,8 @@ pub struct PlaneCallback {
     pub srgb: bool,
     /// Size of the map rectangle in physical pixels.
     pub viewport_px: [u32; 2],
+    /// Draw at twice the resolution and shrink, for smooth edges (costs GPU time on big screens).
+    pub supersample: bool,
 }
 
 impl egui_wgpu::CallbackTrait for PlaneCallback {
@@ -364,7 +367,7 @@ impl egui_wgpu::CallbackTrait for PlaneCallback {
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         if let Some(gpu) = resources.get_mut::<PlaneGpu>() {
-            gpu.prepare(device, queue, encoder, &self.draws, self.srgb, self.viewport_px);
+            gpu.prepare(device, queue, encoder, &self.draws, self.srgb, self.viewport_px, self.supersample);
         }
         Vec::new()
     }

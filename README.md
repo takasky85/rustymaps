@@ -22,9 +22,13 @@ Rust + [egui](https://github.com/emilk/egui) + [wgpu](https://wgpu.rs). Map data
 
 The **compass** (bottom right, can be switched off under *View*) points to north and shows the tilt.
 
-The control window (top left, scrolls, sections collapse) also has **Map style & labels**, the **Transit maps** switches
-and the **Flights** controls. It shows frame rate, zoom level, tile counts and which GPU is in use. The app always asks
-for the discrete / high-performance GPU first.
+The **control bar** (top left) has five tabs: **Places** (the globe, San Francisco and every city with a subway map), **Map**
+(style, labels, label font, compass, subway focus), **Transit** (which cities are on, moving trains), **Flights** and **View**
+(tilt/rotate sliders, reset, info). Each tab opens one compact panel, so nothing needs scrolling; click the tab again, click the
+empty map or press **Esc** to close it. The **search box** finds places (through OpenStreetMap's Nominatim service, only when you
+press Enter or *Search*) and the stations and cities of the switched-on subway maps. Clicking a metro symbol flies to that city.
+Your settings are remembered between runs in `settings.txt` in the user data folder (`%LOCALAPPDATA%\rustymaps` on Windows), so new
+builds keep them. The app always asks for the discrete / high-performance GPU first.
 
 ## Map styles and labels
 
@@ -59,7 +63,7 @@ MTR, Singapore MRT & LRT, Mexico City, Madrid, Berlin U-Bahn, Cairo and São Pau
 relations from OpenStreetMap) but are drawn like a subway map: thick colour-coded lines with a white outline and lettered
 roundels at the line ends, with official colours where they are known (London, New York, Paris, Tokyo, LA, Muni) and the
 colour in the OpenStreetMap data elsewhere. Zoomed out, each city whose map is saved in the data folder (those are switched on at start-up) shows a blue **metro symbol**; as you zoom in to city level the symbol fades out while the slim lines fade in, and they get thicker the closer you get. **Station circles and
-names only appear once there is room for them**: a circle needs about 18 px to its nearest neighbour, a name about 56 px. When the view is tilted the station circles can lie flat on the ground (an option).
+names only appear once there is room for them**: a circle needs about 18 px to its nearest neighbour, a name about 56 px. When the view is tilted the station circles can lie flat on the ground (an option). **Click a line** to highlight it (the others fade; click empty map or press Esc to clear). Simulated **trains** shuttle along every line from about zoom 10 (not a timetable, just evenly spread trains).
 
 Systems are plain entries in `src/transit_data.rs` (bounding box, OSM filters, standard line colours), so adding another
 city is one more entry. `rustymaps.exe --fetch-transit <folder> [system ids]` downloads maps by hand.
