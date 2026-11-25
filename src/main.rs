@@ -195,9 +195,18 @@ impl App {
             })
             .collect();
 
+        // Every city whose transit map is saved in the data folder is on from the start (the files
+        // are small and load on worker threads); it shows as a metro symbol until you zoom in.
+        let mut transit = TransitManager::new(&cc.egui_ctx, data_dir.clone());
+        for i in 0..SYSTEMS.len() {
+            if transit.offline(i) {
+                transit.set_enabled(i, true);
+            }
+        }
+
         App {
             cam: Camera::from_degrees(-115.0, 32.0, 2.2),
-            transit: TransitManager::new(&cc.egui_ctx, data_dir.clone()),
+            transit,
             tiles,
             palette: Palette::STANDARD,
             fly: None,
@@ -427,8 +436,8 @@ impl App {
                             }
                         }
                         ui.small(format!(
-                            "Lines from zoom {:.1}; station circles and names appear once there is room for them. Saved maps are read from {}",
-                            transit::LINES_FROM,
+                            "Each city with a saved map shows a metro symbol; the lines fade in from zoom {:.0}, and station circles and names appear once there is room for them. Saved maps are read from {}",
+                            transit::MAP_FROM,
                             self.transit.dir().join("transit").display()
                         ));
                     });
@@ -705,6 +714,7 @@ impl eframe::App for App {
             for l in transit::draw(&painter, rect, &self.cam, zf, &systems) {
                 extras.push(Cand::from_station(l));
             }
+            transit::draw_markers(&painter, rect, &self.cam, zf, &self.transit.markers());
             let mut draws: Vec<PlaneDraw> = Vec::new();
             for (i, p) in self.planes.iter().enumerate() {
                 let (true, Some(radius)) = (p.show, p.radius_m) else { continue };

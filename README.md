@@ -57,7 +57,7 @@ Métro, Moscow, Beijing, Shanghai, Guangzhou, Shenzhen, Chengdu, Wuhan, Nanjing,
 MTR, Singapore MRT & LRT, Mexico City, Madrid, Berlin U-Bahn, Cairo and São Paulo. Lines follow the real tracks (route
 relations from OpenStreetMap) but are drawn like a subway map: thick colour-coded lines with a white outline and lettered
 roundels at the line ends, with official colours where they are known (London, New York, Paris, Tokyo, LA, Muni) and the
-colour in the OpenStreetMap data elsewhere. Lines appear from zoom 5.5 and get thicker as you zoom in. **Station circles and
+colour in the OpenStreetMap data elsewhere. Zoomed out, each city whose map is saved in the data folder (those are switched on at start-up) shows a blue **metro symbol**; as you zoom in to city level the symbol fades out while the slim lines fade in, and they get thicker the closer you get. **Station circles and
 names only appear once there is room for them**: a circle needs about 18 px to its nearest neighbour, a name about 56 px.
 
 Systems are plain entries in `src/transit_data.rs` (bounding box, OSM filters, standard line colours), so adding another

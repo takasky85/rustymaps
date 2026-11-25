@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Stroke};
 
-use crate::camera::{dot, normalize, Camera, FOV_Y, V3};
+use crate::camera::{dot, lonlat_to_vec, normalize, Camera, FOV_Y, V3};
 use crate::tiles::USER_AGENT;
 use crate::transit_data::{self, SystemData, SYSTEMS};
 
@@ -112,6 +112,16 @@ impl TransitManager {
                 None => {}
             }
         }
+    }
+
+    /// A marker for every enabled system whose map is saved in the data folder.
+    pub fn markers(&self) -> Vec<Marker> {
+        self.slots
+            .iter()
+            .zip(SYSTEMS)
+            .filter(|(s, _)| s.enabled && s.offline)
+            .map(|(_, c)| Marker { pos: lonlat_to_vec(c.home.1.to_radians(), c.home.0.to_radians()), title: c.title })
+            .collect()
     }
 
     /// Data of all enabled, loaded systems.
@@ -277,6 +287,12 @@ pub fn fetch_to_dir(dir: &Path, only: &[String]) {
 // Drawing
 // ---------------------------------------------------------------------------
 
+/// A metro symbol shown on the map where a city's transit map is available.
+pub struct Marker {
+    pub pos: V3,
+    pub title: &'static str,
+}
+
 /// A station name that main's label placer should position and collision-check.
 pub struct StationLabel {
     pub at: Pos2,
@@ -297,14 +313,63 @@ fn lerp(zf: f64, pts: &[(f64, f64)]) -> f32 {
     pts[pts.len() - 1].1 as f32
 }
 
-/// Zoom levels from which each element appears.
-pub const LINES_FROM: f64 = 5.5;
-pub const ROUNDELS_FROM: f64 = 8.5;
-pub const STATIONS_FROM: f64 = 8.0;
+/// Zoom levels: the lines fade in between `MAP_FROM` and `MAP_FULL` while the city's metro symbol
+/// fades out; roundels and stations come in once the map is solid.
+pub const MAP_FROM: f64 = 9.0;
+pub const MAP_FULL: f64 = 10.0;
+pub const STATIONS_FROM: f64 = 10.0;
+pub const ROUNDELS_FROM: f64 = 10.5;
 
-/// Line width in logical pixels at a zoom level (the white casing adds to it).
+/// 0 = metro symbol only, 1 = full map (smooth cross-fade).
+pub fn map_fade(zf: f64) -> f32 {
+    let t = ((zf - MAP_FROM) / (MAP_FULL - MAP_FROM)).clamp(0.0, 1.0);
+    (t * t * (3.0 - 2.0 * t)) as f32
+}
+
+/// Line width in logical pixels at a zoom level (the white casing adds to it). Slim when the
+/// whole city is in view, fatter as you zoom in.
 pub fn line_width(zf: f64) -> f32 {
-    lerp(zf, &[(5.5, 3.0), (8.0, 4.6), (11.0, 7.0), (14.0, 10.0), (17.0, 13.5), (20.0, 17.0)])
+    lerp(zf, &[(9.0, 2.0), (11.0, 3.6), (14.0, 7.0), (17.0, 12.0), (20.0, 16.0)])
+}
+
+fn fade(c: Color32, a: f32) -> Color32 {
+    Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), (c.a() as f32 * a).round() as u8)
+}
+
+/// Metro symbols (a blue disc with an "M") for cities whose map is available. They fade out as the
+/// map itself fades in, and in as you leave the close-up globe.
+pub fn draw_markers(painter: &egui::Painter, rect: egui::Rect, cam: &Camera, zf: f64, markers: &[Marker]) {
+    let a = (1.0 - map_fade(zf)) * (((zf - 2.0) / 1.0).clamp(0.0, 1.0) as f32);
+    if a <= 0.01 || markers.is_empty() {
+        return;
+    }
+    let pr = cam.projector(rect.width() as f64, rect.height() as f64);
+    let r = lerp(zf, &[(2.0, 6.0), (5.0, 9.0), (9.0, 12.0)]);
+    let blue = fade(Color32::from_rgb(20, 80, 190), a);
+    let white = fade(Color32::WHITE, a);
+    let shadow = fade(Color32::from_black_alpha(90), a);
+    for m in markers {
+        if !pr.visible(m.pos) {
+            continue;
+        }
+        let Some(s) = pr.project(m.pos) else { continue };
+        let c = rect.min + egui::vec2(s[0] as f32, s[1] as f32);
+        if !rect.expand(30.0).contains(c) {
+            continue;
+        }
+        painter.circle_filled(c + egui::vec2(0.0, 1.5), r + 1.5, shadow);
+        painter.circle(c, r, blue, Stroke::new(2.0_f32, white));
+        painter.text(c, Align2::CENTER_CENTER, "M", FontId::proportional(r * 1.25), white);
+        if zf >= 5.0 {
+            let font = FontId::proportional(12.0);
+            let at = c + egui::vec2(0.0, r + 9.0);
+            let halo = fade(Color32::from_black_alpha(200), a);
+            for (dx, dy) in [(-1.0_f32, 0.0_f32), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)] {
+                painter.text(at + egui::vec2(dx, dy), Align2::CENTER_CENTER, m.title, font.clone(), halo);
+            }
+            painter.text(at, Align2::CENTER_CENTER, m.title, font, white);
+        }
+    }
 }
 
 /// A station circle needs this much room (px to the nearest other station) to be drawn at all.
@@ -375,7 +440,8 @@ pub fn draw(
     systems: &[Arc<SystemData>],
 ) -> Vec<StationLabel> {
     let mut labels = Vec::new();
-    if zf < LINES_FROM || systems.is_empty() {
+    let fade_a = map_fade(zf);
+    if fade_a <= 0.01 || systems.is_empty() {
         return labels;
     }
     let (w, h) = (rect.width() as f64, rect.height() as f64);
@@ -389,8 +455,8 @@ pub fn draw(
     let on_screen = rect.expand(80.0);
 
     let line_w = line_width(zf);
-    let casing = Color32::from_rgba_unmultiplied(255, 255, 255, 240);
-    let casing_extra = (line_w * 0.28).clamp(2.0, 4.0);
+    let casing = fade(Color32::from_rgba_unmultiplied(255, 255, 255, 240), fade_a);
+    let casing_extra = (line_w * 0.28).clamp(1.5, 4.0);
     let ink = Color32::from_rgb(35, 35, 45);
     let mut stations: Vec<(Pos2, &transit_data::Station)> = Vec::new();
 
@@ -440,12 +506,12 @@ pub fn draw(
         }
         for (li, r) in &runs {
             let c = sys.lines[*li].color;
-            painter.add(egui::Shape::line(r.clone(), Stroke::new(line_w, Color32::from_rgb(c[0], c[1], c[2]))));
+            painter.add(egui::Shape::line(r.clone(), Stroke::new(line_w, fade(Color32::from_rgb(c[0], c[1], c[2]), fade_a))));
         }
 
         // 3. Roundels at the ends of each line's longest stretch.
         if zf >= ROUNDELS_FROM {
-            let rr = lerp(zf, &[(8.5, 8.0), (12.0, 10.5), (16.0, 13.0)]);
+            let rr = lerp(zf, &[(10.5, 8.0), (12.0, 10.5), (16.0, 13.0)]);
             for line in &sys.lines {
                 if line.badge.is_empty() {
                     continue;
@@ -479,7 +545,7 @@ pub fn draw(
     if !stations.is_empty() {
         let pts: Vec<Pos2> = stations.iter().map(|s| s.0).collect();
         let gaps = nearest_gaps(&pts, MIN_NAME_GAP);
-        let r_zoom = lerp(zf, &[(8.0, 3.6), (11.0, 5.6), (14.0, 8.0), (17.0, 10.5)]);
+        let r_zoom = lerp(zf, &[(10.0, 3.6), (11.0, 5.6), (14.0, 8.0), (17.0, 10.5)]);
         for ((s, st), gap) in stations.iter().zip(gaps) {
             if gap < MIN_STATION_GAP {
                 continue;
@@ -502,9 +568,18 @@ mod tests {
 
     #[test]
     fn lines_get_thicker_as_you_zoom_in() {
-        assert!(line_width(6.0) >= 3.0);
-        assert!(line_width(12.0) > line_width(8.0));
-        assert!(line_width(17.0) >= 13.0);
+        assert!(line_width(9.0) <= 2.5, "slim when the whole city is in view");
+        assert!(line_width(12.0) > line_width(9.5));
+        assert!(line_width(17.0) >= 11.0);
+    }
+
+    #[test]
+    fn map_fades_in_while_markers_fade_out() {
+        assert_eq!(map_fade(MAP_FROM - 1.0), 0.0);
+        assert_eq!(map_fade(MAP_FULL + 1.0), 1.0);
+        let mid = map_fade((MAP_FROM + MAP_FULL) / 2.0);
+        assert!(mid > 0.4 && mid < 0.6);
+        assert!(STATIONS_FROM >= MAP_FULL);
     }
 
     #[test]
