@@ -22,14 +22,30 @@ pub struct SystemConfig {
     pub home: (f64, f64),
 }
 
-pub const SYSTEMS: [SystemConfig; 3] = [
-    SystemConfig {
-        id: "muni",
-        title: "SF Muni Metro",
-        bbox: [37.60, -122.55, 37.84, -122.35],
-        routes: "subway|light_rail|tram",
-        filters: &[r#"["operator"~"Muni|Municipal Railway|SFMTA"]"#, r#"["network"~"Muni|SFMTA"]"#],
-        known: &[
+
+const fn sys(
+    id: &'static str,
+    title: &'static str,
+    bbox: [f64; 4],
+    routes: &'static str,
+    filters: &'static [&'static str],
+    known: &'static [(&'static str, &'static str, [u8; 3])],
+    home: (f64, f64),
+) -> SystemConfig {
+    SystemConfig { id, title, bbox, routes, filters, known, home }
+}
+
+/// No extra filter: every relation of the wanted `route=` kinds inside the box.
+const ANY: &[&str] = &[""];
+
+pub const SYSTEMS: &[SystemConfig] = &[
+    sys(
+        "muni",
+        "SF Muni Metro",
+        [37.60, -122.55, 37.84, -122.35],
+        "subway|light_rail|tram",
+        &[r#"["operator"~"Muni|Municipal Railway|SFMTA"]"#, r#"["network"~"Muni|SFMTA"]"#],
+        &[
             ("J", "Church", [247, 148, 29]),
             ("K", "Ingleside", [91, 181, 201]),
             ("L", "Taraval", [146, 39, 143]),
@@ -39,15 +55,15 @@ pub const SYSTEMS: [SystemConfig; 3] = [
             ("S", "Shuttle", [255, 194, 14]),
             ("F", "Market", [160, 82, 45]),
         ],
-        home: (37.7897, -122.4003),
-    },
-    SystemConfig {
-        id: "lametro",
-        title: "Los Angeles Metro",
-        bbox: [33.72, -118.52, 34.20, -117.85],
-        routes: "subway|light_rail",
-        filters: &[r#"["network"~"LA Metro|Los Angeles Metro"]"#, r#"["operator"~"LACMTA|Los Angeles County Metropolitan|LA Metro"]"#],
-        known: &[
+        (37.7897, -122.4003),
+    ),
+    sys(
+        "lametro",
+        "Los Angeles Metro",
+        [33.72, -118.52, 34.20, -117.85],
+        "subway|light_rail",
+        &[r#"["network"~"LA Metro|Los Angeles Metro"]"#, r#"["operator"~"LACMTA|Los Angeles County Metropolitan|LA Metro"]"#],
+        &[
             ("A", "A Line", [0, 114, 188]),
             ("B", "B Line", [227, 19, 27]),
             ("C", "C Line", [88, 167, 56]),
@@ -56,15 +72,15 @@ pub const SYSTEMS: [SystemConfig; 3] = [
             ("K", "K Line", [229, 109, 177]),
             ("L", "L Line", [253, 185, 19]),
         ],
-        home: (34.0562, -118.2365),
-    },
-    SystemConfig {
-        id: "tokyometro",
-        title: "Tokyo Metro",
-        bbox: [35.55, 139.50, 35.86, 139.95],
-        routes: "subway",
-        filters: &[r#"["operator"~"Tokyo Metro|東京地下鉄|東京メトロ"]"#, r#"["network"~"Tokyo Metro|東京メトロ"]"#],
-        known: &[
+        (34.0562, -118.2365),
+    ),
+    sys(
+        "tokyometro",
+        "Tokyo Metro",
+        [35.55, 139.50, 35.86, 139.95],
+        "subway",
+        &[r#"["operator"~"Tokyo Metro|東京地下鉄|東京メトロ"]"#, r#"["network"~"Tokyo Metro|東京メトロ"]"#],
+        &[
             ("G", "Ginza", [255, 149, 0]),
             ("M", "Marunouchi", [246, 46, 54]),
             ("m", "Marunouchi", [246, 46, 54]),
@@ -76,8 +92,117 @@ pub const SYSTEMS: [SystemConfig; 3] = [
             ("N", "Namboku", [0, 172, 155]),
             ("F", "Fukutoshin", [156, 94, 49]),
         ],
-        home: (35.6812, 139.7671),
-    },
+        (35.6812, 139.7671),
+    ),
+    sys(
+        "toei",
+        "Tokyo Toei Subway",
+        [35.55, 139.50, 35.86, 139.95],
+        "subway",
+        &[r#"["operator"~"Toei|東京都交通局"]"#, r#"["network"~"Toei|都営"]"#],
+        &[("A", "Asakusa", [232, 82, 152]), ("I", "Mita", [0, 121, 194]), ("S", "Shinjuku", [108, 187, 90]), ("E", "Oedo", [182, 0, 122])],
+        (35.6896, 139.7006),
+    ),
+    sys(
+        "london",
+        "London Underground & DLR",
+        [51.28, -0.65, 51.75, 0.30],
+        "subway|light_rail",
+        &[r#"["network"~"London Underground"]"#, r#"["network"~"Docklands Light Railway"]"#],
+        &[
+            ("", "bakerloo", [178, 99, 0]),
+            ("", "central line", [220, 36, 31]),
+            ("", "circle line", [255, 200, 10]),
+            ("", "district line", [0, 125, 50]),
+            ("", "hammersmith", [244, 169, 190]),
+            ("", "jubilee", [134, 143, 152]),
+            ("", "metropolitan", [155, 0, 88]),
+            ("", "northern line", [20, 20, 20]),
+            ("", "piccadilly", [0, 25, 168]),
+            ("", "victoria line", [0, 152, 216]),
+            ("", "waterloo & city", [147, 206, 186]),
+            ("", "docklands", [0, 175, 170]),
+        ],
+        (51.5074, -0.1278),
+    ),
+    sys(
+        "newyork",
+        "New York City Subway",
+        [40.50, -74.28, 40.92, -73.70],
+        "subway",
+        ANY,
+        &[
+            ("1", "", [238, 53, 46]),
+            ("2", "", [238, 53, 46]),
+            ("3", "", [238, 53, 46]),
+            ("4", "", [0, 147, 60]),
+            ("5", "", [0, 147, 60]),
+            ("6", "", [0, 147, 60]),
+            ("7", "", [185, 51, 173]),
+            ("A", "", [0, 57, 166]),
+            ("C", "", [0, 57, 166]),
+            ("E", "", [0, 57, 166]),
+            ("B", "", [255, 99, 25]),
+            ("D", "", [255, 99, 25]),
+            ("F", "", [255, 99, 25]),
+            ("M", "", [255, 99, 25]),
+            ("G", "", [108, 190, 69]),
+            ("J", "", [153, 102, 51]),
+            ("Z", "", [153, 102, 51]),
+            ("L", "", [167, 169, 172]),
+            ("N", "", [252, 204, 10]),
+            ("Q", "", [252, 204, 10]),
+            ("R", "", [252, 204, 10]),
+            ("W", "", [252, 204, 10]),
+            ("S", "", [128, 129, 131]),
+        ],
+        (40.7527, -73.9772),
+    ),
+    sys(
+        "paris",
+        "Paris Métro",
+        [48.70, 2.10, 49.00, 2.60],
+        "subway",
+        ANY,
+        &[
+            ("1", "", [255, 205, 0]),
+            ("2", "", [0, 60, 166]),
+            ("3", "", [131, 121, 2]),
+            ("3bis", "", [110, 196, 232]),
+            ("4", "", [207, 0, 158]),
+            ("5", "", [255, 126, 46]),
+            ("6", "", [110, 202, 151]),
+            ("7", "", [250, 154, 186]),
+            ("7bis", "", [110, 202, 151]),
+            ("8", "", [225, 155, 223]),
+            ("9", "", [182, 189, 0]),
+            ("10", "", [201, 145, 13]),
+            ("11", "", [112, 75, 28]),
+            ("12", "", [0, 120, 82]),
+            ("13", "", [110, 196, 232]),
+            ("14", "", [98, 37, 157]),
+        ],
+        (48.8566, 2.3522),
+    ),
+    sys("moscow", "Moscow Metro", [55.55, 37.30, 55.95, 37.95], "subway|light_rail", ANY, &[], (55.7558, 37.6173)),
+    sys("beijing", "Beijing Subway", [39.70, 116.05, 40.25, 116.75], "subway", ANY, &[], (39.9087, 116.3975)),
+    sys("shanghai", "Shanghai Metro", [30.90, 121.20, 31.45, 121.85], "subway", ANY, &[], (31.2304, 121.4737)),
+    sys("guangzhou", "Guangzhou Metro", [22.95, 113.10, 23.35, 113.55], "subway", ANY, &[], (23.1291, 113.2644)),
+    sys("shenzhen", "Shenzhen Metro", [22.45, 113.80, 22.80, 114.35], "subway", ANY, &[], (22.5431, 114.0579)),
+    sys("chengdu", "Chengdu Metro", [30.45, 103.85, 30.85, 104.30], "subway", ANY, &[], (30.5728, 104.0668)),
+    sys("wuhan", "Wuhan Metro", [30.35, 114.05, 30.75, 114.55], "subway", ANY, &[], (30.5928, 114.3055)),
+    sys("nanjing", "Nanjing Metro", [31.85, 118.50, 32.25, 119.05], "subway", ANY, &[], (32.0603, 118.7969)),
+    sys("hangzhou", "Hangzhou Metro", [30.10, 120.00, 30.40, 120.45], "subway", ANY, &[], (30.2741, 120.1551)),
+    sys("osaka", "Osaka Metro", [34.45, 135.30, 34.85, 135.70], "subway", ANY, &[], (34.7025, 135.4959)),
+    sys("seoul", "Seoul Metropolitan Subway", [37.35, 126.70, 37.75, 127.30], "subway", ANY, &[], (37.5547, 126.9707)),
+    sys("delhi", "Delhi Metro", [28.35, 76.85, 28.90, 77.50], "subway", ANY, &[], (28.6328, 77.2197)),
+    sys("hongkong", "Hong Kong MTR", [22.20, 113.90, 22.45, 114.30], "subway", ANY, &[], (22.2819, 114.1583)),
+    sys("singapore", "Singapore MRT & LRT", [1.22, 103.60, 1.48, 104.05], "subway|light_rail", ANY, &[], (1.2830, 103.8513)),
+    sys("mexicocity", "Mexico City Metro", [19.30, -99.30, 19.55, -98.95], "subway", ANY, &[], (19.4326, -99.1332)),
+    sys("madrid", "Madrid Metro", [40.25, -3.90, 40.60, -3.45], "subway|light_rail", ANY, &[], (40.4168, -3.7038)),
+    sys("berlin", "Berlin U-Bahn", [52.35, 13.05, 52.65, 13.80], "subway", ANY, &[], (52.5200, 13.4050)),
+    sys("cairo", "Cairo Metro", [29.95, 31.15, 30.20, 31.50], "subway", ANY, &[], (30.0444, 31.2357)),
+    sys("saopaulo", "São Paulo Metro", [-23.75, -46.85, -23.40, -46.45], "subway", ANY, &[], (-23.5505, -46.6333)),
 ];
 
 pub struct TLine {
@@ -100,6 +225,169 @@ pub struct Station {
 pub struct SystemData {
     pub lines: Vec<TLine>,
     pub stations: Vec<Station>,
+    /// Unit vector at the middle of everything, and the angular radius (radians) that contains it.
+    pub center: V3,
+    pub radius: f64,
+}
+
+impl SystemData {
+    /// Computes `center` and `radius`; call after the lines are filled in.
+    pub fn finish(&mut self) {
+        let mut sum = [0.0f64; 3];
+        let mut n = 0usize;
+        for p in self.lines.iter().flat_map(|l| l.paths.iter()).flat_map(|p| p.iter().step_by(4)) {
+            sum = [sum[0] + p[0], sum[1] + p[1], sum[2] + p[2]];
+            n += 1;
+        }
+        if n == 0 {
+            self.center = [0.0, 0.0, 1.0];
+            self.radius = 0.0;
+            return;
+        }
+        let c = crate::camera::normalize(sum);
+        let mut worst = 0.0f64;
+        for p in self.lines.iter().flat_map(|l| l.paths.iter()).flat_map(|p| p.iter()) {
+            worst = worst.max(dot(c, *p).clamp(-1.0, 1.0).acos());
+        }
+        self.center = c;
+        self.radius = worst;
+    }
+
+    pub fn point_count(&self) -> usize {
+        self.lines.iter().flat_map(|l| l.paths.iter()).map(|p| p.len()).sum()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Compact on-disk format (`<id>.tmap`). The raw Overpass answer is tens of megabytes per big city;
+// this keeps only what is drawn, at about 1 cm precision.
+// ---------------------------------------------------------------------------
+
+const TMAP_MAGIC: &[u8; 4] = b"TMP1";
+
+fn put_u16(o: &mut Vec<u8>, v: usize) {
+    o.extend_from_slice(&(v.min(u16::MAX as usize) as u16).to_le_bytes());
+}
+fn put_u32(o: &mut Vec<u8>, v: usize) {
+    o.extend_from_slice(&(v as u32).to_le_bytes());
+}
+fn put_str(o: &mut Vec<u8>, s: &str) {
+    let mut end = s.len().min(200);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    o.push(end as u8);
+    o.extend_from_slice(&s.as_bytes()[..end]);
+}
+fn put_ll(o: &mut Vec<u8>, p: V3) {
+    let (lon, lat) = crate::camera::vec_to_lonlat(p);
+    o.extend_from_slice(&((lon.to_degrees() * 1e7).round() as i32).to_le_bytes());
+    o.extend_from_slice(&((lat.to_degrees() * 1e7).round() as i32).to_le_bytes());
+}
+
+pub fn encode(d: &SystemData) -> Vec<u8> {
+    let mut o = Vec::with_capacity(d.point_count() * 8 + 4096);
+    o.extend_from_slice(TMAP_MAGIC);
+    put_u16(&mut o, d.lines.len());
+    for l in &d.lines {
+        o.extend_from_slice(&l.color);
+        put_str(&mut o, &l.badge);
+        put_str(&mut o, &l.name);
+        put_u32(&mut o, l.paths.len());
+        for p in &l.paths {
+            put_u32(&mut o, p.len());
+            for &v in p {
+                put_ll(&mut o, v);
+            }
+        }
+    }
+    put_u32(&mut o, d.stations.len());
+    for s in &d.stations {
+        put_str(&mut o, &s.name);
+        put_ll(&mut o, s.pos);
+        o.push(s.lines.len().min(255) as u8);
+        for &li in s.lines.iter().take(255) {
+            put_u16(&mut o, li);
+        }
+    }
+    o
+}
+
+struct Reader<'a> {
+    b: &'a [u8],
+    at: usize,
+}
+
+impl<'a> Reader<'a> {
+    fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
+        let end = self.at.checked_add(n).filter(|&e| e <= self.b.len()).ok_or("file ends early")?;
+        let s = &self.b[self.at..end];
+        self.at = end;
+        Ok(s)
+    }
+    fn u8(&mut self) -> Result<u8, String> {
+        Ok(self.take(1)?[0])
+    }
+    fn u16(&mut self) -> Result<usize, String> {
+        let b = self.take(2)?;
+        Ok(u16::from_le_bytes([b[0], b[1]]) as usize)
+    }
+    fn u32(&mut self) -> Result<usize, String> {
+        let b = self.take(4)?;
+        Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+    }
+    fn i32(&mut self) -> Result<i32, String> {
+        let b = self.take(4)?;
+        Ok(i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+    fn string(&mut self) -> Result<String, String> {
+        let n = self.u8()? as usize;
+        Ok(String::from_utf8_lossy(self.take(n)?).into_owned())
+    }
+    fn ll(&mut self) -> Result<V3, String> {
+        let lon = self.i32()? as f64 * 1e-7;
+        let lat = self.i32()? as f64 * 1e-7;
+        Ok(lonlat_to_vec(lon.to_radians(), lat.to_radians()))
+    }
+}
+
+pub fn decode(bytes: &[u8]) -> Result<SystemData, String> {
+    if bytes.len() < 4 || &bytes[..4] != TMAP_MAGIC {
+        return Err("not a RustyMaps transit file".into());
+    }
+    let mut r = Reader { b: bytes, at: 4 };
+    let mut d = SystemData::default();
+    for _ in 0..r.u16()? {
+        let c = r.take(3)?;
+        let color = [c[0], c[1], c[2]];
+        let badge = r.string()?;
+        let name = r.string()?;
+        let mut paths = Vec::new();
+        for _ in 0..r.u32()? {
+            let n = r.u32()?;
+            if n > 5_000_000 {
+                return Err("corrupt file".into());
+            }
+            let mut p = Vec::with_capacity(n);
+            for _ in 0..n {
+                p.push(r.ll()?);
+            }
+            paths.push(p);
+        }
+        d.lines.push(TLine { name, badge, color, paths });
+    }
+    for _ in 0..r.u32()? {
+        let name = r.string()?;
+        let pos = r.ll()?;
+        let n = r.u8()? as usize;
+        let mut lines = Vec::with_capacity(n);
+        for _ in 0..n {
+            lines.push(r.u16()?);
+        }
+        d.stations.push(Station { name, pos, lines });
+    }
+    d.finish();
+    Ok(d)
 }
 
 /// Overpass QL for one system: route relations with full geometry, then their stop nodes.
@@ -290,11 +578,12 @@ pub fn parse(cfg: &SystemConfig, text: &str) -> Result<SystemData, String> {
 
         // Known (standardised) line?
         let known = cfg.known.iter().find(|k| {
-            (!rf.is_empty() && rf == k.0) || (!k.1.is_empty() && (name_raw.contains(k.1) || name_any.contains(k.1)))
+            (!rf.is_empty() && rf == k.0)
+                || (!k.1.is_empty() && (name_raw.to_lowercase().contains(&k.1.to_lowercase()) || name_any.to_lowercase().contains(&k.1.to_lowercase())))
         });
         let (key, color, badge) = match known {
             Some(k) => (
-                format!("known:{}", k.1),
+                format!("known:{}:{}", k.0, k.1),
                 k.2,
                 if k.0.len() <= 2 { k.0.to_uppercase() } else { String::new() },
             ),
@@ -404,6 +693,50 @@ mod tests {
         assert_eq!(long.len(), 5);
         let xs: Vec<f64> = long.iter().map(|p| p.0).collect();
         assert!(xs == [-1.0, 0.0, 1.0, 2.0, 3.0] || xs == [3.0, 2.0, 1.0, 0.0, -1.0], "{xs:?}");
+    }
+
+    #[test]
+    fn compact_format_round_trips() {
+        let d = parse(&SYSTEMS[2], SAMPLE).unwrap();
+        let bytes = encode(&d);
+        let back = decode(&bytes).unwrap();
+        assert_eq!(back.lines.len(), d.lines.len());
+        assert_eq!(back.stations.len(), d.stations.len());
+        assert_eq!(back.lines[0].badge, "G");
+        assert_eq!(back.lines[0].color, [255, 149, 0]);
+        assert_eq!(back.lines[0].paths[0].len(), 3);
+        let err = chord_m(back.lines[0].paths[0][1], d.lines[0].paths[0][1]);
+        assert!(err < 0.05, "{err} m");
+        let names: Vec<&str> = back.stations.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"Shibuya"));
+        assert!(back.radius > 0.0);
+        assert!(decode(&bytes[..bytes.len() - 3]).is_err());
+        assert!(decode(b"nope").is_err());
+    }
+
+    #[test]
+    fn known_colours_are_keyed_by_ref_so_ny_lines_stay_apart() {
+        let ny = SYSTEMS.iter().find(|s| s.id == "newyork").unwrap();
+        let text = r##"{"elements":[
+          {"type":"relation","id":1,"tags":{"route":"subway","ref":"A","name":"A Train"},"members":[{"type":"way","ref":1,"role":"","geometry":[{"lat":40.7,"lon":-74.0},{"lat":40.8,"lon":-73.9}]}]},
+          {"type":"relation","id":2,"tags":{"route":"subway","ref":"1","name":"1 Train"},"members":[{"type":"way","ref":2,"role":"","geometry":[{"lat":40.7,"lon":-74.0},{"lat":40.9,"lon":-73.9}]}]}
+        ]}"##;
+        let d = parse(ny, text).unwrap();
+        assert_eq!(d.lines.len(), 2);
+        assert_ne!(d.lines[0].color, d.lines[1].color);
+    }
+
+    #[test]
+    fn every_system_is_well_formed() {
+        let mut ids = std::collections::HashSet::new();
+        for c in SYSTEMS {
+            assert!(ids.insert(c.id), "duplicate id {}", c.id);
+            let [s, w, n, e] = c.bbox;
+            assert!(s < n && w < e && (-90.0..=90.0).contains(&s) && (-180.0..=180.0).contains(&w), "{}", c.id);
+            assert!(c.home.0 >= s && c.home.0 <= n && c.home.1 >= w && c.home.1 <= e, "{} home outside its box", c.id);
+            assert!(!c.filters.is_empty());
+        }
+        assert!(SYSTEMS.len() >= 25);
     }
 
     #[test]

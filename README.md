@@ -9,37 +9,68 @@ Rust + [egui](https://github.com/emilk/egui) + [wgpu](https://wgpu.rs). Map data
 
 | Action | Effect |
 | --- | --- |
-| Drag | Pan |
-| Right-drag, or the **Tilt** slider | Tilt the view (3D perspective) |
+| Left-drag | Move (pan) the map |
+| Right-drag or middle-drag | Up/down: tilt (3D perspective). Left/right: rotate around the point in the middle |
 | Mouse wheel / pinch | Zoom toward the cursor (down to street level, about zoom 19) |
 | Double-click | Fly in on that spot |
-| **San Francisco** button | Fly from wherever you are to San Francisco (zoom ≈ 12.5) |
+| **R**, **Reset view**, or click the compass | North up, looking straight down |
+| **Tilt** / **Rotate** sliders | The same as dragging, with numbers |
+| **Go to** menu | Fly to any city. Long trips zoom out towards a globe view and zoom back in near the city |
 | **Globe** button | Fly back out to the globe |
 | **Clear cache** button | Delete the on-disk tile cache |
 
-The control window (top left, collapsible) also has the map **Style** (OSM Standard, OSM Bright, Light), the
-**Transit maps** switches and the **Flight** controls described below. It shows frame rate, zoom level, tile counts and which GPU is in use. The app always asks for the
-discrete / high-performance GPU first.
+The **compass** (bottom right, can be switched off under *View*) points to north and shows the tilt.
+
+The control window (top left, scrolls, sections collapse) also has **Map style & labels**, the **Transit maps** switches
+and the **Flights** controls. It shows frame rate, zoom level, tile counts and which GPU is in use. The app always asks
+for the discrete / high-performance GPU first.
+
+## Map styles and labels
+
+16 styles: OSM Standard, OSM Bright, OpenFreeMap Liberty, Positron (light), Dark Matter, Voyager, OSM Humanitarian,
+OpenTopoMap, CyclOSM, OSM Transport, Stamen Terrain, Stamen Toner, Monochrome, Vintage, Midnight and Blueprint. These are
+**colour recreations** of those looks on the one vector data set the app uses (OpenFreeMap). The real styles also differ in
+which features they draw, symbols, hillshading and so on, which a recreation cannot copy; dark styles switch to light
+labels. Labels can be hidden, set to Small / Medium / Large / X-large, and made bolder (no bold font is bundled, so bold
+is drawn by thickening the strokes).
+
+## Offline data folder
+
+Aircraft models and transit maps are plain files, not downloaded or rebuilt with the program:
+
+```
+data/
+  models/b737.bin  a380.bin  b787.bin     baked aircraft (assets/models in this repo)
+  transit/<system>.tmap                   compact transit maps (assets/transit in this repo)
+```
+
+The program looks for it in `%RUSTYMAPS_DATA%` (environment variable), then a `data` folder next to `rustymaps.exe`, then
+`%LOCALAPPDATA%\rustymaps\data` (macOS `~/Library/Application Support/rustymaps/data`, Linux `~/.local/share/rustymaps/data`).
+Get the folder once from the **data** workflow (Actions, *data*, *Run workflow*; it also downloads any transit maps that are
+missing and commits them to `assets/transit`, so each system is only ever downloaded once) and keep it; new builds of the
+program do not need it again. A transit system without a saved file is downloaded when you switch it on, and saved.
 
 ## Transit maps
 
-Switch on **SF Muni Metro**, **Los Angeles Metro** or **Tokyo Metro** in the control window. Lines follow the real
-tracks (route relations from OpenStreetMap) but are drawn like a subway map: thick colour-coded lines with a white
-outline, white station circles with a dark ring (bigger at interchanges), lettered roundels at the line ends, and
-Tokyo Metro / LA Metro / Muni line colours. They appear from zoom 8, stations from 10.5.
+27 systems: SF Muni Metro, Los Angeles Metro, Tokyo Metro, Tokyo Toei, London Underground & DLR, New York City Subway, Paris
+Métro, Moscow, Beijing, Shanghai, Guangzhou, Shenzhen, Chengdu, Wuhan, Nanjing, Hangzhou, Osaka, Seoul, Delhi, Hong Kong
+MTR, Singapore MRT & LRT, Mexico City, Madrid, Berlin U-Bahn, Cairo and São Paulo. Lines follow the real tracks (route
+relations from OpenStreetMap) but are drawn like a subway map: thick colour-coded lines with a white outline and lettered
+roundels at the line ends, with official colours where they are known (London, New York, Paris, Tokyo, LA, Muni) and the
+colour in the OpenStreetMap data elsewhere. Lines appear from zoom 5.5 and get thicker as you zoom in. **Station circles and
+names only appear once there is room for them**: a circle needs about 18 px to its nearest neighbour, a name about 56 px.
 
-The route data is downloaded once from the public Overpass API (one request per system, with an identifying
-`User-Agent`) and cached next to the tile cache for 30 days. If the public servers are overloaded, the app uses a snapshot from a `transit` folder next to the exe (the build workflow downloads one, with patient retries, and ships it in the zip); you can also make one yourself with `rustymaps.exe --fetch-transit <folder>`. Systems are plain entries in `src/transit_data.rs`
-(bounding box, OSM filters, standard line colours), so adding another city is one more entry.
+Systems are plain entries in `src/transit_data.rs` (bounding box, OSM filters, standard line colours), so adding another
+city is one more entry. `rustymaps.exe --fetch-transit <folder> [system ids]` downloads maps by hand.
 
 ## Flight simulation
 
-A Boeing 737 (the Southwest Airlines model, see credits) flies the great-circle route San Francisco → Tokyo Haneda at
-its real cruise altitude (35,000 ft) in about 11 simulated hours. Use the **progress slider** to place it anywhere on
-the route, **Fly** to let it move on its own (real time, 60x, 600x or 3600x), the **Plane size** slider to scale the
-model from 1x to 20,000x, **Look at plane** to fly the camera to it, and **Follow** to keep it centred. Tilt the view to
-see the model in 3D. At its true altitude the plane is only in front of the camera when you are higher than ~11 km, so
-at street zoom it is, correctly, behind you.
+Three aircraft shuttle between their airports until you pause them: a Southwest 737 between Las Vegas and Lubbock, a
+Lufthansa A380 between San Francisco and Frankfurt, and an ANA 787 Dreamliner between San Francisco and Tokyo Haneda. Each
+has its own play/pause, progress slider, **Look at** and **Follow**. At the far end an aircraft waits about six seconds,
+turns around and flies back. Shared sliders set the speed (real time to 3600x), the **model size** (1x to 20,000x) and the
+**altitude exaggeration** (1x to 150x; the true height is shown in feet). Route lines are blue and semi-transparent by default; colour, opacity and width are adjustable. A drop line and a dot mark the spot on the ground
+below each aircraft, and the aircraft are always drawn above the route lines and station markers.
 
 ## How it works
 
@@ -62,7 +93,7 @@ tiles back off (8 s, 16 s, 32 s, 60 s) instead of being retried in a loop.
 ## Known limits
 
 - Maximum zoom is about level 19. The data itself stops at level 14, so beyond that you are magnifying the level-14 geometry (roads and outlines stay crisp, but there is no extra detail).
-- The view is always north-up (tilt only; no rotation).
+- Map styles are colour recreations, not the original style sheets.
 - Where several transit lines share a track they are drawn on top of each other rather than side by side.
 - Transit route data comes from OpenStreetMap tags that I could not test against the live service from my sandbox; if a system fails to load, the control window says why.
 - While zooming quickly, areas with a loaded parent but loading children may briefly show doubled road lines.
@@ -75,14 +106,17 @@ cargo run --release
 ```
 
 GitHub Actions (`.github/workflows/build.yml`) builds a Windows release on every push and uploads
-`rustymaps<YYMMDDHHMM>.zip` as an artifact. Linux and macOS use the same code; they just are not in CI yet.
+`rustymaps<YYMMDDHHMM>.zip` (just the program) as an artifact; `.github/workflows/data.yml` (run by hand) builds
+`rustymaps-data<YYMMDDHHMM>.zip` with the data folder. Aircraft are baked from Sketchfab glTF files with `tools/bake_plane.py`. Linux and macOS use the same code; they just are not in CI yet.
 `Cargo.lock` is not committed yet; the first CI build creates it.
 
-## Attribution
+## Credits
 
-3D model: "Southwest Airlines Boeing 737" by A Random Modeler, <https://sketchfab.com/3d-models/southwest-airlines-boeing-737-73d0cd0c03594c5d9c53235d74b429bf>,
-licensed CC-BY-4.0 (<http://creativecommons.org/licenses/by/4.0/>). It was converted to the compact `assets/plane.bin`
-with `tools/bake_plane.py`.
+Map data © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, tiles by [OpenFreeMap](https://openfreemap.org)
+(© [OpenMapTiles](https://openmaptiles.org/)). Aircraft models from Sketchfab, all CC-BY-4.0:
+[Southwest Airlines Boeing 737](https://sketchfab.com/3d-models/southwest-airlines-boeing-737-73d0cd0c03594c5d9c53235d74b429bf) by A Random Modeler,
+[Airbus A380-841 Lufthansa](https://sketchfab.com/3d-models/airbus-a380-841-lufthansa-edbffac71f88480c82f5690b777e7416) by Nobilis 2,
+[Boeing-787- Dreamliner](https://sketchfab.com/3d-models/boeing-787-dreamliner-524f485c748146b7968e0dd8eb84e786) by themaker845
+(see `assets/models/CREDITS.txt`; the baked files are adaptations).
 
-Map data © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright), schema © [OpenMapTiles](https://openmaptiles.org/),
-tiles served by [OpenFreeMap](https://openfreemap.org). Please keep the on-screen attribution in place.
+Please keep the on-screen attribution in place.

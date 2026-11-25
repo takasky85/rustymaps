@@ -1,0 +1,90 @@
+name: data
+
+# Builds the offline "data" folder: baked aircraft models (committed in assets/models) and transit
+# maps from OpenStreetMap (downloaded once, saved in assets/transit, and only re-downloaded for systems
+# that are missing). Download the artifact once and put the "data" folder next to rustymaps.exe.
+on:
+  workflow_dispatch:
+    inputs:
+      systems:
+        description: "Only (re)fetch these system ids, space separated (default: every missing one)"
+        required: false
+        default: ""
+      refresh:
+        description: "Delete the saved maps of those systems first (or of all if none are named)"
+        required: false
+        default: "false"
+
+permissions:
+  contents: write
+
+jobs:
+  data:
+    runs-on: windows-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build (release)
+        run: cargo build --release
+
+      - name: Assemble data folder
+        shell: bash
+        run: |
+          mkdir -p data/models data/transit
+          cp assets/models/*.bin data/models/ || true
+          cp assets/transit/*.tmap data/transit/ 2>/dev/null || true
+          if [ "${{ github.event.inputs.refresh }}" = "true" ]; then
+            if [ -n "${{ github.event.inputs.systems }}" ]; then
+              for s in ${{ github.event.inputs.systems }}; do rm -f "data/transit/$s.tmap"; done
+            else
+              rm -f data/transit/*.tmap
+            fi
+          fi
+          ls -la data/models data/transit
+
+      # The public Overpass servers are often overloaded: patient retries, one system at a time,
+      # systems that already have a saved map are skipped.
+      - name: Fetch transit maps
+        shell: pwsh
+        continue-on-error: true
+        timeout-minutes: 200
+        run: |
+          $ids = "${{ github.event.inputs.systems }}".Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries)
+          $argList = @("--fetch-transit", "data/transit") + $ids
+          Start-Process -FilePath target/release/rustymaps.exe -ArgumentList $argList -Wait -NoNewWindow
+          if (Test-Path data/transit/fetch.log) {
+            Get-Content data/transit/fetch.log
+            "``````" | Add-Content $env:GITHUB_STEP_SUMMARY
+            Get-Content data/transit/fetch.log | Select-Object -Last 400 | Add-Content $env:GITHUB_STEP_SUMMARY
+            "``````" | Add-Content $env:GITHUB_STEP_SUMMARY
+          }
+
+      - name: Save new maps in the repository
+        shell: bash
+        run: |
+          mkdir -p assets/transit
+          cp data/transit/*.tmap assets/transit/ 2>/dev/null || true
+          cp data/transit/fetch.log assets/transit/fetch.log 2>/dev/null || true
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add assets/transit
+          if git diff --cached --quiet; then echo "nothing new"; else git commit -m "Update transit data [skip ci]" && git push; fi
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $stamp = Get-Date -Format "yyMMddHHmm"
+          $name = "rustymaps-data$stamp"
+          New-Item -ItemType Directory -Path dist | Out-Null
+          Remove-Item data/transit/fetch.log -ErrorAction SilentlyContinue
+          Compress-Archive -Path data -DestinationPath "dist/$name.zip"
+          "ZIP_NAME=$name.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustymaps-data
+          path: dist/${{ env.ZIP_NAME }}

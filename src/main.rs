@@ -6,6 +6,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod camera;
+mod data;
 mod flight;
 mod gpu;
 mod json;
@@ -22,9 +23,10 @@ use std::sync::Arc;
 
 use eframe::{egui, egui_wgpu, wgpu};
 
-use camera::{dot, merc_to_vec, Camera, MAX_ALT, MAX_PITCH, MIN_ALT, V3};
+use camera::{dot, merc_to_vec, Camera, Projector, MAX_ALT, MAX_PITCH, MIN_ALT, V3};
+use flight::{AircraftDef, Route, Sim, AIRCRAFT};
 use gpu::{Globals, MapCallback};
-use plane::PlaneFrame;
+use plane::{PlaneCallback, PlaneDraw};
 use style::Palette;
 use tiles::TileManager;
 use transit::{StationLabel, Status, TransitManager};
@@ -67,7 +69,8 @@ fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().collect();
     if let Some(i) = args.iter().position(|a| a == "--fetch-transit") {
         let dir = args.get(i + 1).map(String::as_str).unwrap_or("transit");
-        transit::fetch_to_dir(std::path::Path::new(dir));
+        let only: Vec<String> = args.iter().skip(i + 2).cloned().collect();
+        transit::fetch_to_dir(std::path::Path::new(dir), &only);
         return Ok(());
     }
     let options = eframe::NativeOptions {
@@ -86,23 +89,38 @@ fn main() -> eframe::Result {
     eframe::run_native("RustyMaps", options, Box::new(|cc| Ok(Box::new(App::new(cc)))))
 }
 
-
-/// A smooth camera move between two views.
+/// A smooth camera move between two views. Long trips climb towards a globe view in the middle and
+/// settle back down at the destination.
 struct Fly {
     from: Camera,
     to: Camera,
     start: f64,
     duration: f64,
+    /// Highest altitude (planet radii) reached on the way.
+    peak: f64,
 }
 
-/// Playback speeds for the simulated flight (multiples of real time).
+/// Playback speeds for the simulated flights (multiples of real time).
 const SPEEDS: [(&str, f64); 4] = [("real time", 1.0), ("60x", 60.0), ("600x", 600.0), ("3600x", 3600.0)];
+
+/// Label size choices: (name, multiplier).
+const LABEL_SIZES: [(&str, f32); 4] = [("Small", 0.85), ("Medium", 1.0), ("Large", 1.3), ("X-large", 1.65)];
 
 struct Stats {
     drawn: usize,
     loaded: usize,
     pending: usize,
     failed: usize,
+}
+
+/// One simulated aircraft.
+struct Plane {
+    def: &'static AircraftDef,
+    route: Route,
+    sim: Sim,
+    show: bool,
+    /// Radius of the loaded model (metres); `None` when the model file was not found.
+    radius_m: Option<f64>,
 }
 
 struct App {
@@ -116,14 +134,29 @@ struct App {
     fps: f64,
     stats: Stats,
     view_h: f64,
-    // flight
-    route: flight::Route,
-    show_flight: bool,
-    flight_t: f64,
-    playing: bool,
+    data_dir: std::path::PathBuf,
+    model_errors: Vec<String>,
+    // labels
+    show_labels: bool,
+    label_size: usize,
+    label_bold: bool,
+    show_compass: bool,
+    // flights
+    planes: Vec<Plane>,
     speed: usize,
     plane_size: f64,
-    follow: bool,
+    exaggeration: f64,
+    follow: Option<usize>,
+    route_color: [u8; 3],
+    route_alpha: f32,
+    route_width: f32,
+}
+
+/// How route lines are drawn (adjustable in the Flights section).
+struct RouteStyle {
+    color: [u8; 3],
+    alpha: f32,
+    width: f32,
 }
 
 impl App {
@@ -133,48 +166,91 @@ impl App {
         let info = rs.adapter.get_info();
         let gpu_name = format!("{} ({:?})", info.name, info.backend);
         let srgb = rs.target_format.is_srgb();
-        let tiles = TileManager::new(&cc.egui_ctx, rs);
-        let transit_dir = tiles.cache_dir().parent().map(|p| p.join("transit")).unwrap_or_else(|| "transit".into());
+        let tiles = TileManager::new(&cc.egui_ctx, rs.clone());
+
+        // Aircraft models and transit maps come from the offline data folder.
+        let data_dir = data::data_dir();
+        let mut model_errors = Vec::new();
+        let planes = AIRCRAFT
+            .iter()
+            .enumerate()
+            .map(|(i, def)| {
+                let radius_m = match data::load_model(&data_dir, def.model) {
+                    Ok(m) => {
+                        plane::upload(&rs, i, &m);
+                        Some(m.radius_m)
+                    }
+                    Err(e) => {
+                        eprintln!("model: {e}");
+                        model_errors.push(e);
+                        None
+                    }
+                };
+                Plane { def, route: Route::of(def), sim: Sim::new(0.35), show: true, radius_m }
+            })
+            .collect();
+
         App {
             cam: Camera::from_degrees(-115.0, 32.0, 2.2),
-            transit: TransitManager::new(&cc.egui_ctx, transit_dir),
+            transit: TransitManager::new(&cc.egui_ctx, data_dir.clone()),
             tiles,
-            palette: Palette::Standard,
+            palette: Palette::STANDARD,
             fly: None,
             srgb,
             gpu_name,
             fps: 60.0,
             stats: Stats { drawn: 0, loaded: 0, pending: 0, failed: 0 },
             view_h: 800.0,
-            route: flight::Route::sfo_to_hnd(),
-            show_flight: true,
-            flight_t: 0.35,
-            playing: false,
+            data_dir,
+            model_errors,
+            show_labels: true,
+            label_size: 1,
+            label_bold: false,
+            show_compass: true,
+            planes,
             speed: 2,
             plane_size: 300.0,
-            follow: false,
+            exaggeration: 12.0,
+            follow: None,
+            route_color: [40, 120, 255],
+            route_alpha: 0.55,
+            route_width: 3.0,
         }
     }
 
-    fn fly_to(&mut self, to: Camera, now: f64, duration: f64) {
-        self.follow = false;
-        self.fly = Some(Fly { from: self.cam, to, start: now, duration });
+    /// Smooth move to `to`. Far destinations zoom out towards a globe view first and zoom back in
+    /// as the destination gets close; `min_duration` is for short hops.
+    fn fly_to(&mut self, to: Camera, now: f64, min_duration: f64) {
+        self.follow = None;
+        let dist = dot(self.cam.dir(), to.dir()).clamp(-1.0, 1.0).acos();
+        let hi = self.cam.alt.max(to.alt);
+        let peak = (dist * 4.0).min(2.4).max(hi);
+        let duration = (min_duration + dist * 2.5).min(9.0);
+        self.fly = Some(Fly { from: self.cam, to, start: now, duration, peak });
     }
 
     fn goto_city(&mut self, lon: f64, lat: f64, now: f64) {
         let alt = Camera::alt_for_zoom(CITY_ZOOM, lat.to_radians(), self.view_h);
         let mut to = Camera::from_degrees(lon, lat, alt);
         to.pitch = self.cam.pitch;
-        self.fly_to(to, now, 4.5);
+        to.heading = self.cam.heading;
+        self.fly_to(to, now, 3.0);
     }
 
-    fn look_at_plane(&mut self, now: f64) {
-        let st = self.route.state(self.flight_t);
-        let (lon, lat) = self.route.lonlat_deg(self.flight_t);
-        let len = flight::PLANE_LENGTH_M * self.plane_size / flight::EARTH_RADIUS_M;
-        let height = st.alt_m / flight::EARTH_RADIUS_M;
-        let mut to = Camera::from_degrees(lon, lat, (8.0 * len).max(3.0 * height));
-        to.pitch = 0.9;
+    fn reset_orientation(&mut self, now: f64) {
+        let mut to = self.cam;
+        to.reset_orientation();
+        self.fly_to(to, now, 0.7);
+    }
+
+    fn look_at_plane(&mut self, i: usize, now: f64) {
+        let p = &self.planes[i];
+        let st = p.sim.state(&p.route);
+        let (lon, lat) = vec_lon_lat(st.ground);
+        let len = p.def.length_m * self.plane_size / flight::EARTH_RADIUS_M;
+        let height = st.alt_m * self.exaggeration / flight::EARTH_RADIUS_M;
+        let mut to = Camera { lon, lat, alt: (8.0 * len).max(3.0 * height), pitch: 0.9, heading: self.cam.heading };
+        to.normalize();
         self.fly_to(to, now, 1.6);
     }
 
@@ -182,12 +258,17 @@ impl App {
         let Some(f) = &self.fly else { return false };
         let t = ((now - f.start) / f.duration).clamp(0.0, 1.0);
         let e = t * t * (3.0 - 2.0 * t);
+        let pe = e * e * (3.0 - 2.0 * e); // the ground moves most while we are high up
         let dlon = camera::wrap_pi(f.to.lon - f.from.lon);
+        let (la0, la1) = (f.from.alt.ln(), f.to.alt.ln());
+        let extra = (f.peak.ln() - 0.5 * (la0 + la1)).max(0.0);
+        let ln_alt = la0 + (la1 - la0) * e + extra * (std::f64::consts::PI * e).sin();
         self.cam = Camera {
-            lon: f.from.lon + dlon * e,
-            lat: f.from.lat + (f.to.lat - f.from.lat) * e,
-            alt: (f.from.alt.ln() + (f.to.alt.ln() - f.from.alt.ln()) * e).exp(),
+            lon: f.from.lon + dlon * pe,
+            lat: f.from.lat + (f.to.lat - f.from.lat) * pe,
+            alt: ln_alt.exp(),
             pitch: f.from.pitch + (f.to.pitch - f.from.pitch) * e,
+            heading: f.from.heading + camera::wrap_pi(f.to.heading - f.from.heading) * e,
         };
         self.cam.normalize();
         if t >= 1.0 {
@@ -215,132 +296,262 @@ impl App {
         let t = |s: String| egui::RichText::new(s).monospace().size(12.0);
         egui::Window::new("RustyMaps")
             .default_pos(rect.min + egui::vec2(10.0, 10.0))
-            .default_width(270.0)
+            .default_width(290.0)
             .resizable(false)
             .show(ctx, |ui| {
-                let lat = self.cam.lat.to_degrees();
-                let lon = self.cam.lon.to_degrees();
-                ui.label(t(format!("{:.0} fps   zoom {:.2}   tilt {:.0}°", self.fps, zf, self.cam.pitch.to_degrees())));
-                ui.label(t(format!("{lat:.4}°, {lon:.4}°")));
-                ui.label(t(format!(
-                    "tiles: {} drawn, {} cached, {} loading{}",
-                    self.stats.drawn,
-                    self.stats.loaded,
-                    self.stats.pending,
-                    if self.stats.failed > 0 { format!(", {} retrying", self.stats.failed) } else { String::new() }
-                )));
-                ui.label(t(format!("GPU: {}", self.gpu_name)));
-                ui.small("drag: pan   right-drag: tilt   wheel: zoom   double-click: zoom in");
+                egui::ScrollArea::vertical().max_height((rect.height() - 90.0).max(200.0)).auto_shrink([true, true]).show(ui, |ui| {
+                    ui.label(t(format!(
+                        "{:.0} fps   zoom {:.2}   tilt {:.0}°   rot {:.0}°",
+                        self.fps,
+                        zf,
+                        self.cam.pitch.to_degrees(),
+                        self.cam.heading.to_degrees()
+                    )));
+                    ui.label(t(format!("{:.4}°, {:.4}°", self.cam.lat.to_degrees(), self.cam.lon.to_degrees())));
+                    ui.label(t(format!(
+                        "tiles: {} drawn, {} cached, {} loading{}",
+                        self.stats.drawn,
+                        self.stats.loaded,
+                        self.stats.pending,
+                        if self.stats.failed > 0 { format!(", {} retrying", self.stats.failed) } else { String::new() }
+                    )));
+                    ui.label(t(format!("GPU: {}", self.gpu_name)));
+                    ui.small("left-drag: move   right- or middle-drag: tilt (up/down) + rotate (left/right)   wheel: zoom   double-click: zoom in   R: reset view");
 
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label("Style");
-                    egui::ComboBox::from_id_salt("palette").selected_text(self.palette.name()).show_ui(ui, |ui| {
-                        for p in Palette::ALL {
-                            ui.selectable_value(&mut self.palette, p, p.name());
+                    egui::CollapsingHeader::new("View").default_open(true).show(ui, |ui| {
+                        let mut tilt = self.cam.pitch.to_degrees();
+                        if ui.add(egui::Slider::new(&mut tilt, 0.0..=MAX_PITCH.to_degrees()).text("Tilt °")).changed() {
+                            self.cam.pitch = tilt.to_radians();
+                            self.fly = None;
                         }
-                    });
-                });
-                let mut tilt = self.cam.pitch.to_degrees();
-                if ui.add(egui::Slider::new(&mut tilt, 0.0..=MAX_PITCH.to_degrees()).text("Tilt °")).changed() {
-                    self.cam.pitch = tilt.to_radians();
-                    self.fly = None;
-                }
-                ui.horizontal_wrapped(|ui| {
-                    if ui.button("Globe").clicked() {
-                        let mut to = self.cam;
-                        to.alt = 2.2;
-                        to.pitch = 0.0;
-                        self.fly_to(to, now, 2.5);
-                    }
-                    if ui.button("San Francisco").clicked() {
-                        self.goto_city(SF_LON, SF_LAT, now);
-                    }
-                    for sys in SYSTEMS.iter().skip(1) {
-                        let name = sys.title.split_whitespace().next().unwrap_or("");
-                        let name = if sys.id == "lametro" { "Los Angeles" } else { name };
-                        if ui.button(name).clicked() {
-                            self.goto_city(sys.home.1, sys.home.0, now);
+                        let mut rot = self.cam.heading.to_degrees();
+                        if ui.add(egui::Slider::new(&mut rot, -180.0..=180.0).text("Rotate °")).changed() {
+                            self.cam.heading = rot.to_radians();
+                            self.fly = None;
                         }
-                    }
-                    if ui.button("Clear cache").clicked() {
-                        self.tiles.clear_cache();
-                    }
-                });
-
-                ui.separator();
-                ui.strong("Transit maps");
-                for (i, sys) in SYSTEMS.iter().enumerate() {
-                    let mut on = self.transit.enabled(i);
-                    ui.horizontal(|ui| {
-                        if ui.checkbox(&mut on, sys.title).changed() {
-                            self.transit.set_enabled(i, on);
-                        }
-                        match self.transit.status(i) {
-                            Status::Loading => {
-                                ui.spinner();
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.button("Reset view").on_hover_text("north up, looking straight down (R)").clicked() {
+                                self.reset_orientation(now);
                             }
-                            Status::Failed(_) => {
-                                ui.colored_label(egui::Color32::LIGHT_RED, "failed");
+                            if ui.button("Globe").clicked() {
+                                let mut to = self.cam;
+                                to.alt = 2.2;
+                                to.pitch = 0.0;
+                                to.heading = 0.0;
+                                self.fly_to(to, now, 2.5);
                             }
-                            _ => {}
-                        }
+                            if ui.button("Clear cache").clicked() {
+                                self.tiles.clear_cache();
+                            }
+                        });
+                        ui.checkbox(&mut self.show_compass, "Compass");
+                        ui.horizontal(|ui| {
+                            ui.label("Go to");
+                            egui::ComboBox::from_id_salt("goto").selected_text("choose a city…").show_ui(ui, |ui| {
+                                if ui.selectable_label(false, "San Francisco").clicked() {
+                                    self.goto_city(SF_LON, SF_LAT, now);
+                                }
+                                for sys in SYSTEMS.iter() {
+                                    if ui.selectable_label(false, sys.title).clicked() {
+                                        self.goto_city(sys.home.1, sys.home.0, now);
+                                    }
+                                }
+                            });
+                        });
                     });
-                    if let Status::Failed(e) = self.transit.status(i) {
-                        ui.small(egui::RichText::new(e).color(egui::Color32::LIGHT_RED));
-                    }
-                }
-                ui.small("Shown from zoom 8; stations from 10.5. Data: OpenStreetMap.");
 
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.strong("Flight: San Francisco → Tokyo");
-                });
-                ui.checkbox(&mut self.show_flight, "Show route and plane");
-                let st = self.route.state(self.flight_t);
-                ui.horizontal(|ui| {
-                    let label = if self.playing { "⏸ Pause" } else { "▶ Fly" };
-                    if ui.button(label).clicked() {
-                        if self.flight_t >= 1.0 {
-                            self.flight_t = 0.0;
+                    egui::CollapsingHeader::new("Map style & labels").default_open(true).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Style");
+                            egui::ComboBox::from_id_salt("palette").selected_text(self.palette.name()).width(190.0).show_ui(ui, |ui| {
+                                for p in Palette::all() {
+                                    ui.selectable_value(&mut self.palette, p, p.name());
+                                }
+                            });
+                        });
+                        ui.checkbox(&mut self.show_labels, "Show labels");
+                        ui.horizontal(|ui| {
+                            for (i, (name, _)) in LABEL_SIZES.iter().enumerate() {
+                                ui.radio_value(&mut self.label_size, i, *name);
+                            }
+                        });
+                        ui.checkbox(&mut self.label_bold, "Bold labels");
+                        ui.small("Styles are colour recreations of well-known OpenStreetMap looks on the same vector data.");
+                    });
+
+                    egui::CollapsingHeader::new(format!("Transit maps ({})", SYSTEMS.len())).default_open(false).show(ui, |ui| {
+                        for (i, sys) in SYSTEMS.iter().enumerate() {
+                            let mut on = self.transit.enabled(i);
+                            ui.horizontal(|ui| {
+                                if ui.checkbox(&mut on, sys.title).changed() {
+                                    self.transit.set_enabled(i, on);
+                                }
+                                match self.transit.status(i) {
+                                    Status::Loading => {
+                                        ui.spinner();
+                                    }
+                                    Status::Failed(_) => {
+                                        ui.colored_label(egui::Color32::LIGHT_RED, "failed");
+                                    }
+                                    _ => {
+                                        if !self.transit.offline(i) && !on {
+                                            ui.weak("download");
+                                        }
+                                    }
+                                }
+                            });
+                            if let Status::Failed(e) = self.transit.status(i) {
+                                ui.small(egui::RichText::new(e).color(egui::Color32::LIGHT_RED));
+                            }
                         }
-                        self.playing = !self.playing;
-                    }
-                    if ui.button("⏮").on_hover_text("back to San Francisco").clicked() {
-                        self.flight_t = 0.0;
-                    }
-                    egui::ComboBox::from_id_salt("speed").selected_text(SPEEDS[self.speed].0).show_ui(ui, |ui| {
-                        for (i, (name, _)) in SPEEDS.iter().enumerate() {
-                            ui.selectable_value(&mut self.speed, i, *name);
+                        ui.small(format!(
+                            "Lines from zoom {:.1}; station circles and names appear once there is room for them. Saved maps are read from {}",
+                            transit::LINES_FROM,
+                            self.transit.dir().join("transit").display()
+                        ));
+                    });
+
+                    egui::CollapsingHeader::new("Flights").default_open(true).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            egui::ComboBox::from_id_salt("speed").selected_text(SPEEDS[self.speed].0).show_ui(ui, |ui| {
+                                for (i, (name, _)) in SPEEDS.iter().enumerate() {
+                                    ui.selectable_value(&mut self.speed, i, *name);
+                                }
+                            });
+                            if ui.button("▶ all").clicked() {
+                                for p in &mut self.planes {
+                                    p.sim.playing = true;
+                                }
+                            }
+                            if ui.button("⏸ all").clicked() {
+                                for p in &mut self.planes {
+                                    p.sim.playing = false;
+                                }
+                            }
+                        });
+                        ui.add(egui::Slider::new(&mut self.plane_size, 1.0..=20000.0).logarithmic(true).text("Size ×"));
+                        ui.add(egui::Slider::new(&mut self.exaggeration, 1.0..=150.0).logarithmic(true).text("Altitude ×"));
+                        ui.horizontal(|ui| {
+                            ui.label("Route lines");
+                            ui.color_edit_button_srgb(&mut self.route_color);
+                        });
+                        ui.add(egui::Slider::new(&mut self.route_alpha, 0.1..=1.0).text("Opacity"));
+                        ui.add(egui::Slider::new(&mut self.route_width, 1.0..=10.0).text("Width"));
+                        if !self.model_errors.is_empty() {
+                            ui.colored_label(egui::Color32::LIGHT_RED, "Some aircraft models were not found:");
+                            for e in &self.model_errors {
+                                ui.small(egui::RichText::new(e).color(egui::Color32::LIGHT_RED));
+                            }
+                            ui.small(format!("Put the data folder next to the program or at {}", self.data_dir.display()));
                         }
+                        let mut look: Option<usize> = None;
+                        for i in 0..self.planes.len() {
+                            ui.separator();
+                            let p = &mut self.planes[i];
+                            let st = p.sim.state(&p.route);
+                            ui.horizontal(|ui| {
+                                ui.checkbox(&mut p.show, format!("{}  {} → {}", p.def.label, p.def.from.0, p.def.to.0));
+                            });
+                            ui.horizontal(|ui| {
+                                if ui.button(if p.sim.playing { "⏸" } else { "▶" }).clicked() {
+                                    p.sim.playing = !p.sim.playing;
+                                }
+                                if ui.button("⏮").on_hover_text("back to the start").clicked() {
+                                    p.sim.set_t(0.0);
+                                    p.sim.outbound = true;
+                                }
+                                if ui.button("Look at").clicked() {
+                                    look = Some(i);
+                                }
+                                let mut f = self.follow == Some(i);
+                                if ui.checkbox(&mut f, "Follow").changed() {
+                                    self.follow = if f { Some(i) } else { None };
+                                }
+                            });
+                            ui.spacing_mut().slider_width = 230.0;
+                            let mut tt = p.sim.t;
+                            if ui.add(egui::Slider::new(&mut tt, 0.0..=1.0).show_value(false)).changed() {
+                                p.sim.set_t(tt);
+                            }
+                            let status = if p.sim.pause > 0.0 {
+                                "turning around"
+                            } else if p.sim.outbound {
+                                "outbound"
+                            } else {
+                                "returning"
+                            };
+                            ui.label(t(format!(
+                                "{:.0}%  {:.1} h  {:.0} ft  {}",
+                                p.sim.t * 100.0,
+                                p.sim.t * p.route.duration_s() / 3600.0,
+                                st.alt_m / 0.3048,
+                                status
+                            )));
+                        }
+                        if let Some(i) = look {
+                            self.planes[i].show = true;
+                            self.look_at_plane(i, now);
+                        }
+                        ui.small("Aircraft shuttle between their airports until paused. Altitude × lifts them above the ground so they read as flying.");
                     });
                 });
-                ui.spacing_mut().slider_width = 220.0;
-                ui.add(egui::Slider::new(&mut self.flight_t, 0.0..=1.0).show_value(false));
-                let elapsed_h = self.flight_t * self.route.duration_s() / 3600.0;
-                let (flon, flat) = self.route.lonlat_deg(self.flight_t);
-                ui.label(t(format!(
-                    "{:.0}%  {:.1} h   {:.0} ft",
-                    self.flight_t * 100.0,
-                    elapsed_h,
-                    st.alt_m / 0.3048
-                )));
-                ui.label(t(format!("{flat:.2}°, {flon:.2}°")));
-                ui.add(
-                    egui::Slider::new(&mut self.plane_size, 1.0..=20000.0)
-                        .logarithmic(true)
-                        .text("Plane size ×"),
-                );
-                ui.horizontal(|ui| {
-                    if ui.button("Look at plane").clicked() {
-                        self.show_flight = true;
-                        self.look_at_plane(now);
-                    }
-                    ui.checkbox(&mut self.follow, "Follow");
-                });
-                ui.small("The plane flies at its real altitude, so it is only in front of the camera once you are higher than ~11 km (zoom out) — or use Look at plane.");
             });
     }
+
+    /// The compass rose (bottom right): points to north, click to put north back up.
+    fn compass(&mut self, ctx: &egui::Context, now: f64) {
+        let heading = self.cam.heading as f32;
+        let tilt = self.cam.pitch.to_degrees();
+        let mut clicked = false;
+        egui::Area::new(egui::Id::new("compass")).anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-14.0, -14.0)).show(ctx, |ui| {
+            let size = 84.0;
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+            let p = ui.painter_at(rect.expand(2.0));
+            let c = rect.center();
+            let r = size * 0.5 - 2.0;
+            p.circle(c, r, egui::Color32::from_black_alpha(150), egui::Stroke::new(1.5_f32, egui::Color32::from_white_alpha(200)));
+            // screen direction of a compass bearing
+            let dir = |bearing: f32| egui::vec2((bearing - heading).sin(), -(bearing - heading).cos());
+            for k in 0..16 {
+                let b = k as f32 * std::f32::consts::TAU / 16.0;
+                let len = if k % 4 == 0 { 0.16 } else { 0.09 };
+                let d = dir(b);
+                p.line_segment([c + d * r * (1.0 - len), c + d * r * 0.97], egui::Stroke::new(1.2_f32, egui::Color32::from_white_alpha(170)));
+            }
+            let north = dir(0.0);
+            let side = egui::vec2(-north.y, north.x);
+            let tip = c + north * r * 0.78;
+            let tail = c - north * r * 0.62;
+            p.add(egui::Shape::convex_polygon(
+                vec![tip, c + side * r * 0.2, c - north * r * 0.05, c - side * r * 0.2],
+                egui::Color32::from_rgb(230, 60, 50),
+                egui::Stroke::NONE,
+            ));
+            p.add(egui::Shape::convex_polygon(
+                vec![tail, c + side * r * 0.2, c, c - side * r * 0.2],
+                egui::Color32::from_gray(225),
+                egui::Stroke::NONE,
+            ));
+            p.text(c + north * r * 0.5 + side * 0.0, egui::Align2::CENTER_CENTER, "N", egui::FontId::proportional(12.0), egui::Color32::WHITE);
+            if tilt > 1.0 {
+                p.text(
+                    egui::pos2(c.x, rect.max.y - 1.0),
+                    egui::Align2::CENTER_BOTTOM,
+                    format!("{tilt:.0}°"),
+                    egui::FontId::monospace(10.0),
+                    egui::Color32::from_white_alpha(200),
+                );
+            }
+            clicked = resp.on_hover_text("Click: north up and straight down (R)").clicked();
+        });
+        if clicked {
+            self.reset_orientation(now);
+        }
+    }
+}
+
+fn vec_lon_lat(p: V3) -> (f64, f64) {
+    camera::vec_to_lonlat(p)
 }
 
 impl eframe::App for App {
@@ -352,21 +563,30 @@ impl eframe::App for App {
         }
         self.transit.poll();
 
-        if self.playing {
-            self.flight_t += dt.min(0.1) * SPEEDS[self.speed].1 / self.route.duration_s();
-            if self.flight_t >= 1.0 {
-                self.flight_t = 1.0;
-                self.playing = false;
+        let speed = SPEEDS[self.speed].1;
+        let mut animating = false;
+        for p in &mut self.planes {
+            if p.sim.playing {
+                p.sim.advance(dt.min(0.1), speed, p.route.duration_s());
+                animating = true;
             }
+        }
+        if animating {
             ctx.request_repaint();
         }
         if self.step_fly(now) {
             ctx.request_repaint();
-        } else if self.follow && self.show_flight {
-            let (lon, lat) = self.route.lonlat_deg(self.flight_t);
-            self.cam.lon = lon.to_radians();
-            self.cam.lat = lat.to_radians();
-            self.cam.normalize();
+        } else if let Some(i) = self.follow {
+            let p = &self.planes[i];
+            if p.show {
+                let (lon, lat) = vec_lon_lat(p.sim.state(&p.route).ground);
+                self.cam.lon = lon;
+                self.cam.lat = lat;
+                self.cam.normalize();
+            }
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::R)) && !ctx.wants_keyboard_input() {
+            self.reset_orientation(now);
         }
 
         let mut rect_for_ui = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
@@ -383,18 +603,16 @@ impl eframe::App for App {
             self.view_h = h;
 
             // --- input ---
-            if resp.dragged_by(egui::PointerButton::Primary) {
-                let d = resp.drag_delta();
-                if d != egui::Vec2::ZERO {
+            let d = resp.drag_delta();
+            if d != egui::Vec2::ZERO {
+                if resp.dragged_by(egui::PointerButton::Primary) {
                     self.fly = None;
-                    self.follow = false;
+                    self.follow = None;
                     self.cam.pan(d.x as f64, d.y as f64, h);
+                } else if resp.dragged_by(egui::PointerButton::Secondary) || resp.dragged_by(egui::PointerButton::Middle) {
+                    self.fly = None;
+                    self.cam.orbit(d.x as f64, d.y as f64);
                 }
-            }
-            if resp.dragged_by(egui::PointerButton::Secondary) {
-                let d = resp.drag_delta();
-                self.fly = None;
-                self.cam.pitch = (self.cam.pitch - d.y as f64 * 0.006).clamp(0.0, MAX_PITCH);
             }
             if resp.hovered() {
                 let (scroll, pinch) = ctx.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
@@ -407,7 +625,10 @@ impl eframe::App for App {
             if resp.double_clicked() {
                 if let Some(p) = resp.interact_pointer_pos() {
                     if let Some((lon, lat)) = self.cam.pick((p.x - rect.min.x) as f64, (p.y - rect.min.y) as f64, w, h) {
-                        let mut to = Camera { lon, lat, alt: self.cam.alt * 0.35, pitch: self.cam.pitch };
+                        let mut to = self.cam;
+                        to.lon = lon;
+                        to.lat = lat;
+                        to.alt = self.cam.alt * 0.35;
                         to.normalize();
                         self.fly_to(to, now, 0.9);
                     }
@@ -425,15 +646,6 @@ impl eframe::App for App {
                 failed: frame_tiles.failed,
             };
 
-            // --- 3D plane ---
-            let flight_state = self.route.state(self.flight_t);
-            let plane = if self.show_flight {
-                flight::plane_matrices(&self.cam, w / h, &flight_state, self.plane_size)
-                    .map(|(mvp, nrm)| PlaneFrame { mvp, nrm, srgb: self.srgb })
-            } else {
-                None
-            };
-
             // --- map (GPU) ---
             let ppp = ctx.pixels_per_point();
             let pos = self.cam.pos();
@@ -447,6 +659,7 @@ impl eframe::App for App {
                     (self.cam.alt * self.cam.pitch.cos()) as f32,
                     (self.cam.alt * self.cam.pitch.sin()) as f32,
                 ],
+                head: [self.cam.heading.sin() as f32, self.cam.heading.cos() as f32, 0.0, 0.0],
                 screen: [w as f32 * ppp, h as f32 * ppp, 0.0, 0.0],
                 styles: style::table(zf, ppp, self.palette),
             };
@@ -457,48 +670,84 @@ impl eframe::App for App {
                 MapCallback {
                     globals,
                     cam_merc: camera::lonlat_to_merc(self.cam.lon, self.cam.lat),
-                    plane,
-                    viewport_px: [(w as f32 * ppp) as u32, (h as f32 * ppp) as u32],
                     draw: frame_tiles.draw.clone(),
                 },
             ));
 
-            // --- overlays (egui) ---
+            // --- overlays (egui), bottom to top: routes, transit, plane drop lines ---
+            let pr = self.cam.projector(w, h);
             let mut extras: Vec<Cand> = Vec::new();
-            if self.show_flight {
-                draw_route(&painter, rect, &self.cam, &self.route, &flight_state, self.plane_size, &mut extras);
-            }
+            let rs = RouteStyle { color: self.route_color, alpha: self.route_alpha, width: self.route_width };
+            draw_routes(&painter, rect, &pr, &self.planes, &rs, &mut extras);
             let systems = self.transit.visible();
             for l in transit::draw(&painter, rect, &self.cam, zf, &systems) {
                 extras.push(Cand::from_station(l));
             }
-            draw_labels(&painter, rect, &self.cam, zf, &frame_tiles.labels, extras);
+            let mut draws: Vec<PlaneDraw> = Vec::new();
+            for (i, p) in self.planes.iter().enumerate() {
+                let (true, Some(radius)) = (p.show, p.radius_m) else { continue };
+                let st = p.sim.state(&p.route);
+                draw_plane_marker(&painter, rect, &self.cam, &pr, &st, p.def, self.plane_size, self.exaggeration);
+                if let Some((mvp, nrm)) = flight::plane_matrices(&self.cam, w / h, &st, self.plane_size, self.exaggeration, radius) {
+                    draws.push(PlaneDraw { model: i, mvp, nrm });
+                }
+            }
 
-            // --- attribution (required by the data licences) ---
-            egui::Area::new(egui::Id::new("attribution"))
-                .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-8.0, -8.0))
-                .show(ctx, |ui| {
-                    egui::Frame::new()
-                        .fill(egui::Color32::from_black_alpha(170))
-                        .corner_radius(4.0)
-                        .inner_margin(egui::Margin::symmetric(6, 3))
-                        .show(ui, |ui| {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.spacing_mut().item_spacing.x = 4.0;
-                                ui.hyperlink_to("OpenFreeMap", "https://openfreemap.org");
-                                ui.hyperlink_to("© OpenMapTiles", "https://openmaptiles.org/");
-                                ui.label("Data from");
-                                ui.hyperlink_to("OpenStreetMap", "https://www.openstreetmap.org/copyright");
-                                ui.label("· 737 model:");
-                                ui.hyperlink_to(
-                                    "A Random Modeler (CC-BY-4.0)",
-                                    "https://sketchfab.com/3d-models/southwest-airlines-boeing-737-73d0cd0c03594c5d9c53235d74b429bf",
-                                );
-                            });
+            // --- the aircraft themselves: above the routes and station markers, below the labels ---
+            if !draws.is_empty() {
+                painter.add(egui_wgpu::Callback::new_paint_callback(
+                    rect,
+                    PlaneCallback {
+                        draws,
+                        srgb: self.srgb,
+                        viewport_px: [(w as f32 * ppp) as u32, (h as f32 * ppp) as u32],
+                    },
+                ));
+            }
+
+            // --- labels ---
+            if self.show_labels {
+                let ls = LabelStyle { scale: LABEL_SIZES[self.label_size].1, bold: self.label_bold, dark: self.palette.dark() };
+                draw_labels(&painter, rect, &pr, zf, &frame_tiles.labels, extras, &ls);
+            }
+
+            // --- attribution (required by the data and model licences) ---
+            egui::Area::new(egui::Id::new("attribution")).anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(8.0, -8.0)).show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_black_alpha(170))
+                    .corner_radius(4.0)
+                    .inner_margin(egui::Margin::symmetric(6, 3))
+                    .show(ui, |ui| {
+                        ui.set_max_width((rect.width() - 130.0).max(200.0));
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            ui.hyperlink_to("OpenFreeMap", "https://openfreemap.org");
+                            ui.hyperlink_to("© OpenMapTiles", "https://openmaptiles.org/");
+                            ui.label("Data from");
+                            ui.hyperlink_to("OpenStreetMap", "https://www.openstreetmap.org/copyright");
+                            ui.label("· Models (CC-BY-4.0): 737 by");
+                            ui.hyperlink_to(
+                                "A Random Modeler",
+                                "https://sketchfab.com/3d-models/southwest-airlines-boeing-737-73d0cd0c03594c5d9c53235d74b429bf",
+                            );
+                            ui.label("A380 by");
+                            ui.hyperlink_to(
+                                "Nobilis 2",
+                                "https://sketchfab.com/3d-models/airbus-a380-841-lufthansa-edbffac71f88480c82f5690b777e7416",
+                            );
+                            ui.label("787 by");
+                            ui.hyperlink_to(
+                                "themaker845",
+                                "https://sketchfab.com/3d-models/boeing-787-dreamliner-524f485c748146b7968e0dd8eb84e786",
+                            );
                         });
-                });
+                    });
+            });
         });
 
+        if self.show_compass {
+            self.compass(ctx, now);
+        }
         self.controls(ctx, rect_for_ui, now, zf_for_ui);
     }
 }
@@ -507,74 +756,91 @@ impl eframe::App for App {
 // Overlays
 // ---------------------------------------------------------------------------
 
-fn visible_on_globe(cam: &Camera, p: V3) -> bool {
-    dot(p, cam.pos()) > 1.0 + 1e-9
+fn to_screen(pr: &Projector, rect: egui::Rect, p: V3) -> Option<egui::Pos2> {
+    if !pr.visible(p) {
+        return None;
+    }
+    pr.project(p).map(|s| rect.min + egui::vec2(s[0] as f32, s[1] as f32))
 }
 
-/// The route line, airport markers and a ring that keeps a tiny plane findable.
-fn draw_route(
+/// Route lines and airport markers of every shown aircraft (the planes are drawn above these).
+fn draw_routes(painter: &egui::Painter, rect: egui::Rect, pr: &Projector, planes: &[Plane], rs: &RouteStyle, labels: &mut Vec<Cand>) {
+    let mut airports: Vec<&str> = Vec::new();
+    for p in planes.iter().filter(|p| p.show) {
+        let mut run: Vec<egui::Pos2> = Vec::new();
+        let mut runs: Vec<Vec<egui::Pos2>> = Vec::new();
+        for v in p.route.polyline(360) {
+            match to_screen(pr, rect, v) {
+                Some(s) => run.push(s),
+                None => {
+                    if run.len() >= 2 {
+                        runs.push(std::mem::take(&mut run));
+                    }
+                    run.clear();
+                }
+            }
+        }
+        if run.len() >= 2 {
+            runs.push(run);
+        }
+        let c = rs.color;
+        let a = (rs.alpha.clamp(0.0, 1.0) * 255.0) as u8;
+        let line = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], a);
+        let casing = egui::Color32::from_rgba_unmultiplied(255, 255, 255, (a as f32 * 0.45) as u8);
+        for r in &runs {
+            painter.add(egui::Shape::line(r.clone(), egui::Stroke::new(rs.width + 2.0, casing)));
+        }
+        for r in &runs {
+            painter.add(egui::Shape::line(r.clone(), egui::Stroke::new(rs.width, line)));
+        }
+        for (name, lon, lat) in [p.def.from, p.def.to] {
+            if airports.contains(&name) {
+                continue;
+            }
+            airports.push(name);
+            let v = camera::lonlat_to_vec(lon.to_radians(), lat.to_radians());
+            if let Some(s) = to_screen(pr, rect, v) {
+                painter.circle(s, 4.0, egui::Color32::WHITE, egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(c[0], c[1], c[2])));
+                labels.push(Cand::new(0.5, name.to_string(), 12.0, [c[0] / 3, c[1] / 3, c[2] / 3], [255, 255, 255], s + egui::vec2(0.0, -14.0)));
+            }
+        }
+    }
+}
+
+/// A line from the plane down to the spot on the ground beneath it, a dot there, and a ring that
+/// keeps a tiny plane findable from afar.
+#[allow(clippy::too_many_arguments)]
+fn draw_plane_marker(
     painter: &egui::Painter,
     rect: egui::Rect,
     cam: &Camera,
-    route: &flight::Route,
+    pr: &Projector,
     st: &flight::FlightState,
+    def: &AircraftDef,
     size_mul: f64,
-    labels: &mut Vec<Cand>,
+    exaggeration: f64,
 ) {
-    let (w, h) = (rect.width() as f64, rect.height() as f64);
-    let to_screen = |p: V3| -> Option<egui::Pos2> {
-        if !visible_on_globe(cam, p) {
-            return None;
+    let (pos, _r, fwd, _u) = flight::plane_frame(st, exaggeration);
+    let c = def.color;
+    let col = egui::Color32::from_rgb(c[0], c[1], c[2]);
+    let ground = to_screen(pr, rect, st.ground);
+    let plane = if occluded(cam, pos) { None } else { pr.project(pos).map(|s| rect.min + egui::vec2(s[0] as f32, s[1] as f32)) };
+    if let (Some(g), Some(p)) = (ground, plane) {
+        if g.distance(p) > 3.0 {
+            painter.line_segment([g, p], egui::Stroke::new(1.2_f32, egui::Color32::from_white_alpha(170)));
         }
-        cam.project(p, w, h).map(|s| rect.min + egui::vec2(s[0] as f32, s[1] as f32))
-    };
-
-    let mut run: Vec<egui::Pos2> = Vec::new();
-    let mut runs: Vec<Vec<egui::Pos2>> = Vec::new();
-    for p in route.polyline(360) {
-        match to_screen(p) {
-            Some(s) => run.push(s),
-            None => {
-                if run.len() >= 2 {
-                    runs.push(std::mem::take(&mut run));
-                }
-                run.clear();
-            }
-        }
+        painter.circle(g, 2.5, col, egui::Stroke::new(1.0_f32, egui::Color32::WHITE));
     }
-    if run.len() >= 2 {
-        runs.push(run);
-    }
-    for r in &runs {
-        painter.add(egui::Shape::line(r.clone(), egui::Stroke::new(5.0_f32, egui::Color32::from_black_alpha(110))));
-    }
-    for r in &runs {
-        painter.add(egui::Shape::line(r.clone(), egui::Stroke::new(2.5_f32, egui::Color32::from_rgb(255, 140, 0))));
-    }
-
-    for (name, (lon, lat)) in [("SFO", flight::SFO), ("HND", flight::HND)] {
-        let p = lonlat_vec(lon, lat);
-        if let Some(s) = to_screen(p) {
-            painter.circle(s, 4.0, egui::Color32::WHITE, egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(255, 140, 0)));
-            labels.push(Cand::new(0.5, name.to_string(), 12.0, [255, 120, 0], [255, 255, 255], s + egui::vec2(0.0, -14.0)));
-        }
-    }
-
-    // Ring around the plane while it is smaller than ~14 px, so it can be found from afar.
-    let (pos, _r, fwd, _u) = flight::plane_frame(st);
-    let nose = camera_add(pos, fwd, 0.5 * flight::PLANE_LENGTH_M * size_mul / flight::EARTH_RADIUS_M);
-    if let (Some(a), Some(b)) = (cam.project(pos, w, h), cam.project(nose, w, h)) {
+    // Ring around the plane while it is smaller than ~14 px.
+    let nose = camera_add(pos, fwd, 0.5 * def.length_m * size_mul / flight::EARTH_RADIUS_M);
+    if let (Some(a), Some(b)) = (pr.project(pos), pr.project(nose)) {
         if (a[0] - b[0]).hypot(a[1] - b[1]) < 7.0 && !occluded(cam, pos) {
-            let c = rect.min + egui::vec2(a[0] as f32, a[1] as f32);
-            if rect.contains(c) {
-                painter.circle_stroke(c, 11.0, egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(255, 140, 0)));
+            let ctr = rect.min + egui::vec2(a[0] as f32, a[1] as f32);
+            if rect.contains(ctr) {
+                painter.circle_stroke(ctr, 11.0, egui::Stroke::new(2.0_f32, col));
             }
         }
     }
-}
-
-fn lonlat_vec(lon_deg: f64, lat_deg: f64) -> V3 {
-    camera::lonlat_to_vec(lon_deg.to_radians(), lat_deg.to_radians())
 }
 
 fn camera_add(p: V3, d: V3, s: f64) -> V3 {
@@ -607,50 +873,52 @@ impl Cand {
 
     fn from_station(l: StationLabel) -> Self {
         let priority = if l.interchange { 9.5 } else { 17.0 };
-        Cand::new(priority, l.text, if l.interchange { 12.0 } else { 11.0 }, [20, 20, 30], [255, 255, 255], l.at)
+        Cand::new(priority, l.text, if l.interchange { 12.5 } else { 11.5 }, [20, 20, 30], [255, 255, 255], l.at)
     }
+}
+
+/// How labels look: size multiplier, bold, and whether the map is dark.
+struct LabelStyle {
+    scale: f32,
+    bold: bool,
+    dark: bool,
 }
 
 /// Places labels greedily by priority; a label that would overlap one already placed is dropped.
 fn draw_labels(
     painter: &egui::Painter,
     rect: egui::Rect,
-    cam: &Camera,
+    pr: &Projector,
     zf: f64,
     tiles: &[Arc<Vec<mesh::Label>>],
     mut cands: Vec<Cand>,
+    ls: &LabelStyle,
 ) {
     let (w, h) = (rect.width() as f64, rect.height() as f64);
     for t in tiles {
         for l in t.iter() {
-            let Some(rule) = style::label_rule(l.kind, l.rank, zf) else { continue };
+            let Some(rule) = style::label_rule(l.kind, l.rank, zf, ls.dark) else { continue };
             let p = merc_to_vec(l.mx, l.my);
-            if !visible_on_globe(cam, p) {
+            if !pr.visible(p) {
                 continue;
             }
-            let Some(s) = cam.project(p, w, h) else { continue };
+            let Some(s) = pr.project(p) else { continue };
             if s[0] < -40.0 || s[0] > w + 40.0 || s[1] < -20.0 || s[1] > h + 20.0 {
                 continue;
             }
             let text = if rule.upper { l.text.to_uppercase() } else { l.text.clone() };
-            cands.push(Cand::new(
-                rule.priority,
-                text,
-                rule.size,
-                rule.color,
-                rule.halo,
-                rect.min + egui::vec2(s[0] as f32, s[1] as f32),
-            ));
+            cands.push(Cand::new(rule.priority, text, rule.size, rule.color, rule.halo, rect.min + egui::vec2(s[0] as f32, s[1] as f32)));
         }
     }
     cands.sort_by(|a, b| a.priority.partial_cmp(&b.priority).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut placed: Vec<egui::Rect> = Vec::new();
-    for c in cands.into_iter().take(600) {
-        if placed.len() >= 200 {
+    let bold = if ls.bold { 0.45_f32 } else { 0.0 };
+    for c in cands.into_iter().take(700) {
+        if placed.len() >= 220 {
             break;
         }
-        let font = egui::FontId::proportional(c.size);
+        let font = egui::FontId::proportional(c.size * ls.scale);
         let col = egui::Color32::from_rgb(c.color[0], c.color[1], c.color[2]);
         let halo = egui::Color32::from_rgb(c.halo[0], c.halo[1], c.halo[2]);
         let main = painter.layout_no_wrap(c.text.clone(), font.clone(), col);
@@ -662,9 +930,15 @@ fn draw_labels(
         placed.push(padded);
 
         let shadow = painter.layout_no_wrap(c.text, font, halo);
-        let o = 1.3;
+        let o = 1.3 + bold * 1.4;
         for (dx, dy) in [(-o, 0.0), (o, 0.0), (0.0, -o), (0.0, o), (-o, -o), (o, -o), (-o, o), (o, o)] {
             painter.galley(r.min + egui::vec2(dx, dy), shadow.clone(), halo);
+        }
+        if ls.bold {
+            // No bold font is bundled: fatten the strokes by drawing the text a little off-centre.
+            for (dx, dy) in [(-bold, 0.0), (bold, 0.0), (0.0, -bold * 0.6), (0.0, bold * 0.6)] {
+                painter.galley(r.min + egui::vec2(dx, dy), main.clone(), col);
+            }
         }
         painter.galley(r.min, main, col);
     }

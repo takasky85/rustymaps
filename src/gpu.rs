@@ -10,7 +10,6 @@ use eframe::{egui, egui_wgpu, wgpu};
 
 use crate::camera::lonlat_to_vec;
 use crate::mesh::{self, FillVertex, LineInst, TileMesh};
-use crate::plane::{PlaneFrame, PlaneGpu};
 use crate::style;
 use crate::tile_id::TileId;
 
@@ -20,7 +19,7 @@ fn as_bytes<T: Copy>(s: &[T]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(s.as_ptr() as *const u8, std::mem::size_of_val(s)) }
 }
 
-/// Per-frame uniforms. Layout must match `Globals` in shader.wgsl (1200 bytes).
+/// Per-frame uniforms. Layout must match `Globals` in shader.wgsl (1216 bytes).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Globals {
@@ -32,6 +31,8 @@ pub struct Globals {
     pub cam_pos: [f32; 4],
     /// x = cos(target latitude), y = sin(target latitude), z = alt*cos(pitch), w = alt*sin(pitch).
     pub cam_rel: [f32; 4],
+    /// x = sin(heading), y = cos(heading).
+    pub head: [f32; 4],
     /// xy = viewport size in physical pixels.
     pub screen: [f32; 4],
     pub styles: [[f32; 8]; style::TABLE_SIZE],
@@ -301,20 +302,16 @@ pub struct MapCallback {
     pub globals: Globals,
     /// Camera position in normalized mercator (0..1), full f64 precision.
     pub cam_merc: (f64, f64),
-    /// The 3D plane for this frame, if it is visible.
-    pub plane: Option<PlaneFrame>,
-    /// Size of the map rectangle in physical pixels.
-    pub viewport_px: [u32; 2],
     pub draw: Vec<TileId>,
 }
 
 impl egui_wgpu::CallbackTrait for MapCallback {
     fn prepare(
         &self,
-        device: &wgpu::Device,
+        _device: &wgpu::Device,
         queue: &wgpu::Queue,
         _screen_descriptor: &egui_wgpu::ScreenDescriptor,
-        egui_encoder: &mut wgpu::CommandEncoder,
+        _egui_encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         if let Some(gpu) = callback_resources.get_mut::<MapGpu>() {
@@ -331,9 +328,6 @@ impl egui_wgpu::CallbackTrait for MapCallback {
                     queue.write_buffer(&t.uniform, 0, as_bytes(&data));
                 }
             }
-        }
-        if let Some(plane) = callback_resources.get_mut::<PlaneGpu>() {
-            plane.prepare(device, queue, egui_encoder, self.plane.as_ref(), self.viewport_px);
         }
         Vec::new()
     }
@@ -379,11 +373,6 @@ impl egui_wgpu::CallbackTrait for MapCallback {
                     render_pass.draw(0..6, 0..t.line_count);
                 }
             }
-        }
-
-        // 4. The 3D plane, rendered separately with its own depth buffer.
-        if let Some(plane) = callback_resources.get::<PlaneGpu>() {
-            plane.paint(render_pass);
         }
     }
 }

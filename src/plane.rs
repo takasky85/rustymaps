@@ -1,22 +1,29 @@
-//! GPU side of the 3D plane: the baked 737 mesh, an offscreen pass with depth testing, and the
-//! composite that lays the result over the map.
+//! GPU side of the 3D aircraft: baked meshes (loaded from the data folder), one offscreen pass with
+//! a shared depth buffer that draws every visible plane, and the composite that lays the result over
+//! the map. It is its own paint callback so it can sit *above* the route lines and station markers.
 
+use eframe::egui;
 use eframe::egui_wgpu;
 use eframe::wgpu;
 use eframe::wgpu::util::DeviceExt;
 
-/// Baked from the glTF by tools/bake_plane.py: header (u32 vertices, u32 indices), vertices
-/// (position f32x3, normal snorm8x4, colour unorm8x4), indices u32. Axes: x right, y forward, z up, metres.
-const MODEL: &[u8] = include_bytes!("../assets/plane.bin");
-const VERTEX_SIZE: usize = 20;
+use crate::data::{ModelData, MODEL_HEADER, VERTEX_SIZE};
+
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
-/// What the paint callback needs for one frame of plane.
+/// One aircraft to draw this frame.
 #[derive(Clone, Copy)]
-pub struct PlaneFrame {
+pub struct PlaneDraw {
+    /// Index of the uploaded model.
+    pub model: usize,
     pub mvp: [f32; 16],
     pub nrm: [f32; 16],
-    pub srgb: bool,
+}
+
+struct ModelGpu {
+    vb: wgpu::Buffer,
+    ib: wgpu::Buffer,
+    index_count: u32,
 }
 
 #[repr(C)]
@@ -37,39 +44,20 @@ struct Target {
 pub struct PlaneGpu {
     pipeline: wgpu::RenderPipeline,
     composite: wgpu::RenderPipeline,
-    uniform: wgpu::Buffer,
-    uniform_bg: wgpu::BindGroup,
+    uniform_bgl: wgpu::BindGroupLayout,
+    /// One uniform buffer + bind group per plane drawn in a frame (grown on demand).
+    uniforms: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
     composite_bgl: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    vb: wgpu::Buffer,
-    ib: wgpu::Buffer,
-    index_count: u32,
+    models: Vec<Option<ModelGpu>>,
     format: wgpu::TextureFormat,
     target: Option<Target>,
+    draws: Vec<PlaneDraw>,
     active: bool,
-}
-
-fn u32_at(b: &[u8], at: usize) -> u32 {
-    u32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]])
 }
 
 impl PlaneGpu {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
-        let nv = u32_at(MODEL, 0) as usize;
-        let ni = u32_at(MODEL, 4) as usize;
-        let verts = &MODEL[8..8 + nv * VERTEX_SIZE];
-        let indices = &MODEL[8 + nv * VERTEX_SIZE..8 + nv * VERTEX_SIZE + ni * 4];
-        let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("plane vertices"),
-            contents: verts,
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("plane indices"),
-            contents: indices,
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("plane shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("plane.wgsl").into()),
@@ -88,18 +76,6 @@ impl PlaneGpu {
                 count: None,
             }],
         });
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("plane uniform"),
-            size: std::mem::size_of::<Uniform>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let uniform_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("plane uniform bg"),
-            layout: &ubgl,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() }],
-        });
-
         let attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Snorm8x4, 2 => Unorm8x4];
         let playout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("plane layout"),
@@ -203,16 +179,51 @@ impl PlaneGpu {
         PlaneGpu {
             pipeline,
             composite,
-            uniform,
-            uniform_bg,
+            uniform_bgl: ubgl,
+            uniforms: Vec::new(),
             composite_bgl,
             sampler,
-            vb,
-            ib,
-            index_count: ni as u32,
+            models: Vec::new(),
             format,
             target: None,
+            draws: Vec::new(),
             active: false,
+        }
+    }
+
+    /// Uploads a baked model as slot `index`.
+    pub fn add_model(&mut self, device: &wgpu::Device, index: usize, m: &ModelData) {
+        let vend = MODEL_HEADER + m.vertices * VERTEX_SIZE;
+        let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("plane vertices"),
+            contents: &m.bytes[MODEL_HEADER..vend],
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("plane indices"),
+            contents: &m.bytes[vend..vend + m.indices * 4],
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        if self.models.len() <= index {
+            self.models.resize_with(index + 1, || None);
+        }
+        self.models[index] = Some(ModelGpu { vb, ib, index_count: m.indices as u32 });
+    }
+
+    fn ensure_uniforms(&mut self, device: &wgpu::Device, n: usize) {
+        while self.uniforms.len() < n {
+            let buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("plane uniform"),
+                size: std::mem::size_of::<Uniform>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("plane uniform bg"),
+                layout: &self.uniform_bgl,
+                entries: &[wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() }],
+            });
+            self.uniforms.push((buf, bg));
         }
     }
 
@@ -251,18 +262,20 @@ impl PlaneGpu {
         Target { size, color, depth, bind_group }
     }
 
-    /// Draws the model into the offscreen texture (or marks the plane as not shown).
+    /// Draws all planes into the offscreen texture (or marks them as not shown).
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
-        frame: Option<&PlaneFrame>,
+        draws: &[PlaneDraw],
+        srgb: bool,
         viewport_px: [u32; 2],
     ) {
         self.active = false;
-        let Some(frame) = frame else { return };
-        if viewport_px[0] == 0 || viewport_px[1] == 0 {
+        self.draws.clear();
+        self.draws.extend(draws.iter().copied().filter(|d| matches!(self.models.get(d.model), Some(Some(_)))));
+        if self.draws.is_empty() || viewport_px[0] == 0 || viewport_px[1] == 0 {
             return;
         }
         // Supersample 2x for smooth edges unless the screen is already huge.
@@ -272,10 +285,14 @@ impl PlaneGpu {
         if self.target.as_ref().map_or(true, |t| t.size != size) {
             self.target = Some(self.make_target(device, size));
         }
-        let u = Uniform { mvp: frame.mvp, nrm: frame.nrm, flags: [if frame.srgb { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0] };
-        // SAFETY: `Uniform` is repr(C) and made only of f32, so it has no padding.
-        let bytes = unsafe { std::slice::from_raw_parts(&u as *const Uniform as *const u8, std::mem::size_of::<Uniform>()) };
-        queue.write_buffer(&self.uniform, 0, bytes);
+        self.ensure_uniforms(device, self.draws.len());
+        for (i, d) in self.draws.iter().enumerate() {
+            let u = Uniform { mvp: d.mvp, nrm: d.nrm, flags: [if srgb { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0] };
+            // SAFETY: `Uniform` is repr(C) and made only of f32, so it has no padding.
+            let bytes =
+                unsafe { std::slice::from_raw_parts(&u as *const Uniform as *const u8, std::mem::size_of::<Uniform>()) };
+            queue.write_buffer(&self.uniforms[i].0, 0, bytes);
+        }
 
         let target = self.target.as_ref().unwrap();
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -294,10 +311,13 @@ impl PlaneGpu {
             occlusion_query_set: None,
         });
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.uniform_bg, &[]);
-        pass.set_vertex_buffer(0, self.vb.slice(..));
-        pass.set_index_buffer(self.ib.slice(..), wgpu::IndexFormat::Uint32);
-        pass.draw_indexed(0..self.index_count, 0, 0..1);
+        for (i, d) in self.draws.iter().enumerate() {
+            let Some(Some(m)) = self.models.get(d.model) else { continue };
+            pass.set_bind_group(0, &self.uniforms[i].1, &[]);
+            pass.set_vertex_buffer(0, m.vb.slice(..));
+            pass.set_index_buffer(m.ib.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..m.index_count, 0, 0..1);
+        }
         drop(pass);
         self.active = true;
     }
@@ -317,4 +337,41 @@ impl PlaneGpu {
 
 pub fn insert(rs: &egui_wgpu::RenderState) {
     rs.renderer.write().callback_resources.insert(PlaneGpu::new(&rs.device, rs.target_format));
+}
+
+/// Uploads a model into slot `index` of the shared renderer.
+pub fn upload(rs: &egui_wgpu::RenderState, index: usize, model: &ModelData) {
+    if let Some(gpu) = rs.renderer.write().callback_resources.get_mut::<PlaneGpu>() {
+        gpu.add_model(&rs.device, index, model);
+    }
+}
+
+/// Paint callback for all aircraft of one frame; add it after everything the planes must cover.
+pub struct PlaneCallback {
+    pub draws: Vec<PlaneDraw>,
+    pub srgb: bool,
+    /// Size of the map rectangle in physical pixels.
+    pub viewport_px: [u32; 2],
+}
+
+impl egui_wgpu::CallbackTrait for PlaneCallback {
+    fn prepare(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        _screen: &egui_wgpu::ScreenDescriptor,
+        encoder: &mut wgpu::CommandEncoder,
+        resources: &mut egui_wgpu::CallbackResources,
+    ) -> Vec<wgpu::CommandBuffer> {
+        if let Some(gpu) = resources.get_mut::<PlaneGpu>() {
+            gpu.prepare(device, queue, encoder, &self.draws, self.srgb, self.viewport_px);
+        }
+        Vec::new()
+    }
+
+    fn paint(&self, _info: egui::PaintCallbackInfo, pass: &mut wgpu::RenderPass<'static>, resources: &egui_wgpu::CallbackResources) {
+        if let Some(gpu) = resources.get::<PlaneGpu>() {
+            gpu.paint(pass);
+        }
+    }
 }

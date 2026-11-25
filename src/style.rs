@@ -50,58 +50,222 @@ fn lerp_w(zf: f64, z0: f64, w0: f64, z1: f64, w1: f64) -> f32 {
     (w0 + (w1 - w0) * t) as f32
 }
 
-/// Selectable map looks. Same data and widths, different colours.
+/// Selectable map looks: colour recreations of well-known OpenStreetMap styles. They all draw the same
+/// OpenFreeMap data, so layers and label content are the same; only colours differ (and dark styles
+/// switch to light labels).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Palette {
-    /// Colours of the standard openstreetmap.org map.
-    Standard,
-    /// A livelier take on the same layout: stronger water, parks and roads.
-    Bright,
-    /// Pale, low-contrast background that lets overlays stand out.
-    Light,
+pub struct Palette(pub usize);
+
+struct PaletteDef {
+    name: &'static str,
+    dark: bool,
+    /// 0xRRGGBB per style id (see the constants above).
+    colors: [u32; COUNT],
 }
 
+const PALETTES: &[PaletteDef] = &[
+    PaletteDef {
+        name: "OSM Standard",
+        dark: false,
+        colors: [
+            0xf2efe9, 0xffffff, 0xf5e9c6, 0xeef0d5, 0xcdebb0, 0xb5d6c1,
+            0xadd19e, 0xe0dfdf, 0xe7dee8, 0xc8facc, 0xaad3df, 0xd9d0c9,
+            0xaad3df, 0x6699cc, 0xbea096, 0x969696, 0xffffff, 0xffffff,
+            0xffffff, 0xf7fabf, 0xfcd6a4, 0xf9b29c, 0xe892a2, 0xac8cac,
+            0x8c648c,
+        ],
+    },
+    PaletteDef {
+        name: "OSM Bright",
+        dark: false,
+        colors: [
+            0xf8f4e8, 0xffffff, 0xfce8a0, 0xf3f5be, 0xb2e88c, 0x96dab4,
+            0x80d06e, 0xf0e8da, 0xebe4f4, 0x96e482, 0x60bef0, 0xe4d2c4,
+            0x60bef0, 0x2878dc, 0xdc9682, 0x8c8c96, 0xffffff, 0xffffff,
+            0xffffff, 0xfff478, 0xffc850, 0xff9664, 0xff648c, 0xaa6ebe,
+            0x783c96,
+        ],
+    },
+    PaletteDef {
+        name: "OpenFreeMap Liberty",
+        dark: false,
+        colors: [
+            0xf8f4f0, 0xffffff, 0xf6ebc8, 0xeef0d6, 0xd8e8c8, 0xcfe5d4,
+            0xc8dfb4, 0xede8e2, 0xe9e4ee, 0xcfe8c4, 0xa0c8f0, 0xe0d8d0,
+            0xa0c8f0, 0x6f9bd6, 0xd0b8a8, 0xb0b0b8, 0xffffff, 0xffffff,
+            0xffffff, 0xfff2c0, 0xffd8a0, 0xffbf8c, 0xff9f6e, 0xb8a0b8,
+            0x9a7fa0,
+        ],
+    },
+    PaletteDef {
+        name: "Positron (light)",
+        dark: false,
+        colors: [
+            0xf5f5f2, 0xffffff, 0xf4f0e4, 0xf0f2ea, 0xe6eee0, 0xe0ece6,
+            0xdce8d4, 0xeeeeea, 0xeaeaee, 0xe2eddc, 0xd0dee8, 0xe8e6e2,
+            0xd0dee8, 0xaabed2, 0xe1dad4, 0xc8c8cc, 0xffffff, 0xffffff,
+            0xffffff, 0xfcfcf6, 0xfaf4e8, 0xf8ece0, 0xf6e2d6, 0xc4b8cc,
+            0xa090aa,
+        ],
+    },
+    PaletteDef {
+        name: "Dark Matter",
+        dark: true,
+        colors: [
+            0x1f2125, 0x2c2f33, 0x24262a, 0x22252a, 0x232b27, 0x22302d,
+            0x212c27, 0x25272b, 0x262830, 0x233028, 0x0f1217, 0x2d3036,
+            0x0f1217, 0x3a5f8a, 0x3a3d44, 0x4a4d55, 0x33363d, 0x3a3d45,
+            0x41444c, 0x4b4e57, 0x565963, 0x626571, 0x6f7380, 0x5a5560,
+            0x7c7587,
+        ],
+    },
+    PaletteDef {
+        name: "Voyager",
+        dark: false,
+        colors: [
+            0xf3f1ec, 0xffffff, 0xefe9d8, 0xecebdd, 0xd6e6c8, 0xcde3d6,
+            0xc8dcb4, 0xe8e4dd, 0xe8e2ea, 0xcfe6c2, 0xa6cde4, 0xe0dbd3,
+            0xa6cde4, 0x7aa6d0, 0xd8c4b8, 0xb8b8b8, 0xffffff, 0xffffff,
+            0xffffff, 0xfff0b8, 0xfdd9a0, 0xf9c08c, 0xf4a07a, 0xc0a8c0,
+            0x9d86a3,
+        ],
+    },
+    PaletteDef {
+        name: "OSM Humanitarian",
+        dark: false,
+        colors: [
+            0xf2eee6, 0xffffff, 0xf2e6b8, 0xebe9cc, 0xd4e6b4, 0xbcd9c4,
+            0xb8d29a, 0xe6e0d6, 0xe8dfe4, 0xc8e6b4, 0xb5d0d0, 0xd9c6b8,
+            0xb5d0d0, 0x7aa0c4, 0xc08870, 0x808080, 0xffffff, 0xffffff,
+            0xfff8d8, 0xfbea9a, 0xf8d070, 0xf2a060, 0xe87860, 0xb080a0,
+            0x905070,
+        ],
+    },
+    PaletteDef {
+        name: "OpenTopoMap",
+        dark: false,
+        colors: [
+            0xf0edd8, 0xf4fbff, 0xf2e4b0, 0xeaeac8, 0xd2e5a8, 0xb8dcc0,
+            0xa8cf8a, 0xe4dccc, 0xe0d8d0, 0xbfe0a0, 0xb0cde8, 0xd0c0b0,
+            0x80a8d8, 0x4a78b0, 0x8a5a3a, 0x707070, 0xf5f0e0, 0xffffff,
+            0xfff2a0, 0xffe070, 0xffb050, 0xff8040, 0xf06040, 0xa070a0,
+            0x704070,
+        ],
+    },
+    PaletteDef {
+        name: "CyclOSM",
+        dark: false,
+        colors: [
+            0xf3f0e6, 0xffffff, 0xf6ecc8, 0xecefd2, 0xd0e8b0, 0xbcdcc8,
+            0xb0d49a, 0xe6e0dc, 0xe8e0ec, 0xc4eac4, 0xa8d0e8, 0xdcd0c8,
+            0xa8d0e8, 0x5a88c8, 0x2848e0, 0x808080, 0xffffff, 0xffffff,
+            0xfff0a0, 0xffd870, 0xffb060, 0xff9060, 0xe87070, 0xb098b0,
+            0x8a6e8e,
+        ],
+    },
+    PaletteDef {
+        name: "OSM Transport",
+        dark: false,
+        colors: [
+            0xefefe8, 0xffffff, 0xece8d0, 0xe8e8d8, 0xd8e8c8, 0xd0e0d0,
+            0xc8dcb8, 0xe4e4e0, 0xe4e0e8, 0xc8e4c0, 0xb4d4ec, 0xd8d4d0,
+            0xb4d4ec, 0x6090c0, 0xc8b8b0, 0x6a6a78, 0xffffff, 0xffffff,
+            0xffffff, 0xffe8a0, 0xffc880, 0xffa860, 0xff8860, 0xb098b0,
+            0x8a6e8e,
+        ],
+    },
+    PaletteDef {
+        name: "Stamen Terrain",
+        dark: false,
+        colors: [
+            0xe8ecd4, 0xffffff, 0xf0e6b8, 0xe4ecc4, 0xd4e4b4, 0xbcdcc0,
+            0xa8cc8c, 0xe4e2d0, 0xe0dccc, 0xc0dca0, 0x9cc4e4, 0xd4c8b8,
+            0x9cc4e4, 0x5a88c0, 0xa07050, 0x808078, 0xf8f4e8, 0xf8f4e0,
+            0xf4e8b0, 0xf0d890, 0xe8b868, 0xe09858, 0xd87850, 0xa07898,
+            0x785880,
+        ],
+    },
+    PaletteDef {
+        name: "Stamen Toner",
+        dark: false,
+        colors: [
+            0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xf0f0f0, 0xe0e0e0,
+            0xe6e6e6, 0xf6f6f6, 0xececec, 0xe8e8e8, 0x404040, 0xc8c8c8,
+            0x404040, 0x606060, 0x909090, 0x707070, 0x9a9a9a, 0x000000,
+            0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x808080,
+            0x000000,
+        ],
+    },
+    PaletteDef {
+        name: "Monochrome",
+        dark: false,
+        colors: [
+            0xe8e8e8, 0xffffff, 0xe4e4e4, 0xe6e6e6, 0xdedede, 0xd8d8d8,
+            0xd4d4d4, 0xe0e0e0, 0xdcdcdc, 0xdadada, 0xbcbcbc, 0xd0d0d0,
+            0xbcbcbc, 0x989898, 0xb0b0b0, 0xa0a0a0, 0xf4f4f4, 0xffffff,
+            0xffffff, 0xf8f8f8, 0xf0f0f0, 0xe6e6e6, 0xd8d8d8, 0xa0a0a0,
+            0x707070,
+        ],
+    },
+    PaletteDef {
+        name: "Vintage",
+        dark: false,
+        colors: [
+            0xefe3c8, 0xf8f2e0, 0xead8a8, 0xe6d9b0, 0xd8d0a0, 0xc8cca8,
+            0xc0c490, 0xe4d6b8, 0xdcccb0, 0xccd0a0, 0xb8c8c0, 0xd2bf9c,
+            0xb8c8c0, 0x7a98a0, 0xa88860, 0x8a7a60, 0xf6ecd4, 0xf8f0d8,
+            0xf6e8c0, 0xf0d8a0, 0xe8c080, 0xdca868, 0xc88858, 0xa07860,
+            0x805840,
+        ],
+    },
+    PaletteDef {
+        name: "Midnight",
+        dark: true,
+        colors: [
+            0x14171f, 0x262c3a, 0x1a1d28, 0x171b24, 0x18212a, 0x172430,
+            0x162028, 0x1a1d27, 0x1c1f2a, 0x182430, 0x0a1230, 0x262a38,
+            0x0a1230, 0x3a60b0, 0x3a4054, 0x50587a, 0x2a2f40, 0x303650,
+            0x3a4262, 0x4a5478, 0x5c6890, 0x7080a8, 0x90a0d0, 0x5a5078,
+            0x8a80b0,
+        ],
+    },
+    PaletteDef {
+        name: "Blueprint",
+        dark: true,
+        colors: [
+            0x17406e, 0x1c4a80, 0x1b4676, 0x194372, 0x1b4878, 0x1c4a7c,
+            0x1a4474, 0x1a4676, 0x1c4878, 0x1d4c80, 0x0f2f58, 0x2a5a96,
+            0x0f2f58, 0x7ab0e8, 0x4a7cb8, 0x6a98d0, 0x3b6aa8, 0x5a88c4,
+            0x6c9ad2, 0x7eaae0, 0x94bcec, 0xaaccf4, 0xc4defc, 0x6a98d0,
+            0x9cc2f0,
+        ],
+    },
+];
+
 impl Palette {
-    pub const ALL: [Palette; 3] = [Palette::Standard, Palette::Bright, Palette::Light];
+    pub const STANDARD: Palette = Palette(0);
+    pub const BRIGHT: Palette = Palette(1);
+
+    pub fn all() -> impl Iterator<Item = Palette> {
+        (0..PALETTES.len()).map(Palette)
+    }
 
     pub fn name(self) -> &'static str {
-        match self {
-            Palette::Standard => "OSM Standard",
-            Palette::Bright => "OSM Bright",
-            Palette::Light => "Light",
-        }
+        PALETTES[self.0].name
+    }
+
+    /// Dark map: labels switch to light text on a dark halo.
+    pub fn dark(self) -> bool {
+        PALETTES[self.0].dark
     }
 
     /// RGB per style id (see the constants above).
     fn colors(self) -> [[u8; 3]; COUNT] {
-        match self {
-            //        BG              ICE             SAND            FARM            GRASS           WETLAND
-            Palette::Standard => [
-                [242, 239, 233], [255, 255, 255], [245, 233, 198], [238, 240, 213], [205, 235, 176], [181, 214, 193],
-                //   WOOD            RES             OTHER           PARK            WATER           BUILDING
-                [173, 209, 158], [224, 223, 223], [231, 222, 232], [200, 250, 204], [170, 211, 223], [217, 208, 201],
-                //   WATERWAY        FERRY           PATH            RAIL            SERVICE         MINOR
-                [170, 211, 223], [102, 153, 204], [190, 160, 150], [150, 150, 150], [255, 255, 255], [255, 255, 255],
-                //   TERTIARY        SECONDARY       PRIMARY         TRUNK           MOTORWAY
-                [255, 255, 255], [247, 250, 191], [252, 214, 164], [249, 178, 156], [232, 146, 162],
-                //   BORDER_STATE    BORDER_COUNTRY
-                [172, 140, 172], [140, 100, 140],
-            ],
-            Palette::Bright => [
-                [248, 244, 232], [255, 255, 255], [252, 232, 160], [243, 245, 190], [178, 232, 140], [150, 218, 180],
-                [128, 208, 110], [240, 232, 218], [235, 228, 244], [150, 228, 130], [96, 190, 240], [228, 210, 196],
-                [96, 190, 240], [40, 120, 220], [220, 150, 130], [140, 140, 150], [255, 255, 255], [255, 255, 255],
-                [255, 255, 255], [255, 244, 120], [255, 200, 80], [255, 150, 100], [255, 100, 140],
-                [170, 110, 190], [120, 60, 150],
-            ],
-            Palette::Light => [
-                [245, 245, 242], [255, 255, 255], [244, 240, 228], [240, 242, 234], [230, 238, 224], [224, 236, 230],
-                [220, 232, 212], [238, 238, 234], [234, 234, 238], [226, 237, 220], [208, 222, 232], [232, 230, 226],
-                [208, 222, 232], [170, 190, 210], [225, 218, 212], [200, 200, 204], [255, 255, 255], [255, 255, 255],
-                [255, 255, 255], [252, 252, 246], [250, 244, 232], [248, 236, 224], [246, 226, 214],
-                [196, 184, 204], [160, 144, 170],
-            ],
+        let mut out = [[0u8; 3]; COUNT];
+        for (o, c) in out.iter_mut().zip(PALETTES[self.0].colors) {
+            *o = [(c >> 16) as u8, (c >> 8) as u8, c as u8];
         }
+        out
     }
 }
 
@@ -153,7 +317,17 @@ pub struct LabelRule {
     pub upper: bool,
 }
 
-pub fn label_rule(kind: Kind, rank: u32, zf: f64) -> Option<LabelRule> {
+pub fn label_rule(kind: Kind, rank: u32, zf: f64, dark: bool) -> Option<LabelRule> {
+    let mut rule = label_rule_light(kind, rank, zf)?;
+    if dark {
+        let lift = |c: [u8; 3]| [255 - c[0] / 5, 255 - c[1] / 5, 255 - c[2] / 5];
+        rule.color = lift(rule.color);
+        rule.halo = [16, 18, 24];
+    }
+    Some(rule)
+}
+
+fn label_rule_light(kind: Kind, rank: u32, zf: f64) -> Option<LabelRule> {
     let r = rank.min(100) as f32 * 0.05;
     let white = [255, 255, 255];
     let water_halo = [160, 198, 236];
@@ -237,8 +411,8 @@ mod tests {
 
     #[test]
     fn table_has_every_style_and_hides_by_zoom() {
-        let far = table(1.0, 1.0, Palette::Standard);
-        let near = table(14.0, 1.0, Palette::Standard);
+        let far = table(1.0, 1.0, Palette::STANDARD);
+        let near = table(14.0, 1.0, Palette::STANDARD);
         assert!(far[ROAD_MINOR as usize][4] == 0.0, "minor roads hidden at globe scale");
         assert!(near[ROAD_MINOR as usize][4] > 1.0, "minor roads visible at city scale");
         assert!(far[BORDER_COUNTRY as usize][4] > 0.0, "country borders always visible");
@@ -247,21 +421,38 @@ mod tests {
             assert!(near[id][3] >= 0.0);
         }
         // every palette defines every style, and they really differ
-        let std_water = table(5.0, 1.0, Palette::Standard)[WATER as usize];
-        let bright_water = table(5.0, 1.0, Palette::Bright)[WATER as usize];
+        let std_water = table(5.0, 1.0, Palette::STANDARD)[WATER as usize];
+        let bright_water = table(5.0, 1.0, Palette::BRIGHT)[WATER as usize];
         assert!(std_water[..3] != bright_water[..3]);
         // pixel-ratio scaling applies to widths
-        assert_eq!(table(14.0, 2.0, Palette::Standard)[ROAD_MINOR as usize][4], 2.0 * near[ROAD_MINOR as usize][4]);
+        assert_eq!(table(14.0, 2.0, Palette::STANDARD)[ROAD_MINOR as usize][4], 2.0 * near[ROAD_MINOR as usize][4]);
     }
 
     #[test]
     fn label_rules_follow_zoom() {
-        assert!(label_rule(Kind::Country, 1, 2.0).is_some());
-        assert!(label_rule(Kind::Country, 1, 12.0).is_none());
-        assert!(label_rule(Kind::Village, 50, 5.0).is_none());
-        assert!(label_rule(Kind::Village, 50, 12.0).is_some());
-        let big = label_rule(Kind::City, 1, 5.0).unwrap();
-        let small = label_rule(Kind::City, 20, 5.0).unwrap();
+        assert!(label_rule(Kind::Country, 1, 2.0, false).is_some());
+        assert!(label_rule(Kind::Country, 1, 12.0, false).is_none());
+        assert!(label_rule(Kind::Village, 50, 5.0, false).is_none());
+        assert!(label_rule(Kind::Village, 50, 12.0, false).is_some());
+        let big = label_rule(Kind::City, 1, 5.0, false).unwrap();
+        let small = label_rule(Kind::City, 20, 5.0, false).unwrap();
         assert!(big.priority < small.priority);
+    }
+
+    #[test]
+    fn many_palettes_all_distinct_and_dark_ones_flip_labels() {
+        assert!(Palette::all().count() >= 15);
+        let mut seen = std::collections::HashSet::new();
+        for p in Palette::all() {
+            assert!(seen.insert(p.colors()), "{} duplicates another style", p.name());
+            let t = table(12.0, 1.0, p);
+            assert!(t[WATER as usize][3] == 1.0 && t[ROAD_PRIMARY as usize][4] > 0.0);
+        }
+        let dark = Palette::all().find(|p| p.dark()).expect("a dark style exists");
+        let light = Palette::STANDARD;
+        let a = label_rule(Kind::City, 1, 5.0, true).unwrap();
+        let b = label_rule(Kind::City, 1, 5.0, false).unwrap();
+        assert!(a.color[0] > 200 && b.color[0] < 80, "{:?} {:?}", a.color, b.color);
+        assert!(dark.dark() && !light.dark());
     }
 }

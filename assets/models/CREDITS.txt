@@ -1,0 +1,10 @@
+Aircraft models (Sketchfab, all licensed CC-BY-4.0, http://creativecommons.org/licenses/by/4.0/).
+They were converted by tools/bake_plane.py (textures baked into vertex colours, scaled to the real
+aircraft length, interiors removed); the baked files are "adaptations" of the originals.
+
+b737.bin - "Southwest Airlines Boeing 737" by A Random Modeler (https://sketchfab.com/danielskom111)
+           https://sketchfab.com/3d-models/southwest-airlines-boeing-737-73d0cd0c03594c5d9c53235d74b429bf
+a380.bin - "Airbus A380-841 Lufthansa" by Nobilis 2 (https://sketchfab.com/nobilishornet2)
+           https://sketchfab.com/3d-models/airbus-a380-841-lufthansa-edbffac71f88480c82f5690b777e7416
+b787.bin - "Boeing-787- Dreamliner" (ANA livery) by themaker845 (https://sketchfab.com/themaker845)
+           https://sketchfab.com/3d-models/boeing-787-dreamliner-524f485c748146b7968e0dd8eb84e786

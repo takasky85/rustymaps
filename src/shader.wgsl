@@ -20,6 +20,7 @@ struct Globals {
     proj: mat4x4<f32>,       // target-relative (east, north, radial) -> clip (tiles)
     cam_pos: vec4<f32>,  // xyz = camera position in planet radii, w = 1 if target is sRGB
     cam_rel: vec4<f32>,  // x = cos(target lat), y = sin(target lat), z = alt*cos(pitch), w = alt*sin(pitch)
+    head: vec4<f32>,     // x = sin(heading), y = cos(heading)
     screen: vec4<f32>,   // xy = viewport size in physical pixels
     styles: array<Style, 32>,
 };
@@ -57,8 +58,9 @@ fn rel_clip(r: vec3<f32>) -> vec4<f32> {
 
 // > 0 when the point is on the visible side of the horizon.
 fn rel_horizon(r: vec3<f32>) -> f32 {
-    // dot(point, camera) - 1, with the camera at (1 + alt*cos p) up and alt*sin p south of the target.
-    return g.cam_rel.z + r.z * (1.0 + g.cam_rel.z) - r.y * g.cam_rel.w;
+    // dot(point, camera) - 1, with the camera (1 + alt*cos p) above the target and alt*sin p
+    // behind it (opposite to the heading).
+    return g.cam_rel.z + r.z * (1.0 + g.cam_rel.z) - g.cam_rel.w * (g.head.x * r.x + g.head.y * r.y);
 }
 
 // Premultiplied output; converts to linear when the surface format is sRGB.
