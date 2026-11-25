@@ -705,7 +705,8 @@ mod tests {
         assert_eq!(back.lines[0].badge, "G");
         assert_eq!(back.lines[0].color, [255, 149, 0]);
         assert_eq!(back.lines[0].paths[0].len(), 3);
-        let err = chord_m(back.lines[0].paths[0][1], d.lines[0].paths[0][1]);
+        let (a, b) = (back.lines[0].paths[0][1], d.lines[0].paths[0][1]);
+        let err = ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt() * 6_371_000.0;
         assert!(err < 0.05, "{err} m");
         let names: Vec<&str> = back.stations.iter().map(|s| s.name.as_str()).collect();
         assert!(names.contains(&"Shibuya"));

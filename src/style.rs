@@ -244,6 +244,7 @@ const PALETTES: &[PaletteDef] = &[
 
 impl Palette {
     pub const STANDARD: Palette = Palette(0);
+    #[allow(dead_code)]
     pub const BRIGHT: Palette = Palette(1);
 
     pub fn all() -> impl Iterator<Item = Palette> {

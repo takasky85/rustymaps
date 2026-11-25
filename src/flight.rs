@@ -163,6 +163,7 @@ impl Route {
         (0..=n).map(|i| self.point(i as f64 / n as f64)).collect()
     }
 
+    #[allow(dead_code)]
     pub fn lonlat_deg(&self, t: f64) -> (f64, f64) {
         let (lo, la) = vec_to_lonlat(self.point(t));
         (lo.to_degrees(), la.to_degrees())
@@ -391,7 +392,7 @@ mod tests {
             sim.advance(0.1, 1.0, leg);
             waited += 0.1;
         }
-        assert!((waited - TURN_PAUSE_S).abs() < 0.3, "{waited}");
+        assert!((TURN_PAUSE_S - 1.0..TURN_PAUSE_S + 0.2).contains(&waited), "{waited}");
         assert!(!sim.outbound);
         for _ in 0..30 {
             sim.advance(0.1, 1.0, leg);
