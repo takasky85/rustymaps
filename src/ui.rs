@@ -102,8 +102,13 @@ impl App {
                     if ui.button("Reset view").on_hover_text("north up, looking straight down, centred (R)").clicked() {
                         self.reset_orientation(now);
                     }
+                    ui.label(RichText::new(format!("zoom {:.1}", zf)).monospace())
+                        .on_hover_text("map zoom level (the same scale as web maps: 0 = whole world, 17+ = street level)");
                     ui.label(
-                        RichText::new(format!("{}/s  map {}  planes {}", self.rates[0], self.rates[1], self.rates[2]))
+                        RichText::new(format!(
+                            "{}/s (input {})  map {}  planes {}",
+                            self.rates[0], self.input_rate, self.rates[1], self.rates[2]
+                        ))
                             .monospace()
                             .weak(),
                     )

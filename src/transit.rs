@@ -365,7 +365,7 @@ fn fade(c: Color32, a: f32) -> Color32 {
 }
 
 fn marker_radius(zf: f64) -> f32 {
-    lerp(zf, &[(2.0, 6.0), (5.0, 9.0), (9.0, 12.0)])
+    lerp(zf, &[(2.0, 8.0), (5.0, 12.0), (9.0, 16.0)])
 }
 
 /// Metro symbols (a blue disc with an "M") for cities whose map is available. They fade out as the
@@ -389,12 +389,13 @@ pub fn draw_markers(painter: &egui::Painter, rect: egui::Rect, cam: &Camera, zf:
         if !rect.expand(30.0).contains(c) {
             continue;
         }
-        painter.circle_filled(c + egui::vec2(0.0, 1.5), r + 1.5, shadow);
-        painter.circle(c, r, blue, Stroke::new(2.0_f32, white));
-        painter.text(c, Align2::CENTER_CENTER, "M", FontId::proportional(r * 1.25), white);
+        painter.circle_filled(c + egui::vec2(0.0, 2.0), r + 3.0, shadow);
+        painter.circle_filled(c, r + 2.5, white);
+        painter.circle_filled(c, r, blue);
+        painter.text(c, Align2::CENTER_CENTER, "M", FontId::proportional(r * 1.3), white);
         if zf >= 5.0 {
-            let font = FontId::proportional(12.0);
-            let at = c + egui::vec2(0.0, r + 9.0);
+            let font = FontId::proportional(13.0);
+            let at = c + egui::vec2(0.0, r + 13.0);
             let halo = fade(Color32::from_black_alpha(200), a);
             for (dx, dy) in [(-1.0_f32, 0.0_f32), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)] {
                 painter.text(at + egui::vec2(dx, dy), Align2::CENTER_CENTER, m.title, font.clone(), halo);
@@ -402,6 +403,31 @@ pub fn draw_markers(painter: &egui::Painter, rect: egui::Rect, cam: &Camera, zf:
             painter.text(at, Align2::CENTER_CENTER, m.title, font, white);
         }
     }
+}
+
+/// Screen areas taken by the metro symbols (and their names), so labels can keep clear of them.
+pub fn marker_rects(cam: &Camera, rect: egui::Rect, zf: f64, markers: &[Marker]) -> Vec<egui::Rect> {
+    let a = (1.0 - map_fade(zf)) * (((zf - 2.0) / 1.0).clamp(0.0, 1.0) as f32);
+    if a <= 0.01 {
+        return Vec::new();
+    }
+    let pr = cam.projector(rect.width() as f64, rect.height() as f64);
+    let r = marker_radius(zf) + 4.0;
+    let mut out = Vec::new();
+    for m in markers {
+        if !pr.visible(m.pos) {
+            continue;
+        }
+        let Some(s) = pr.project(m.pos) else { continue };
+        let c = rect.min + egui::vec2(s[0] as f32, s[1] as f32);
+        let mut r2 = egui::Rect::from_center_size(c, egui::vec2(2.0 * r, 2.0 * r));
+        if zf >= 5.0 {
+            let half = 3.6 * m.title.chars().count() as f32 + 4.0;
+            r2 = r2.union(egui::Rect::from_center_size(c + egui::vec2(0.0, r + 13.0), egui::vec2(2.0 * half, 18.0)));
+        }
+        out.push(r2);
+    }
+    out
 }
 
 /// A station circle needs this much room (px to the nearest other station) to be drawn at all.

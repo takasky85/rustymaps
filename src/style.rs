@@ -325,17 +325,21 @@ pub fn table(zf: f64, ppp: f32, palette: Palette) -> [[f32; 8]; TABLE_SIZE] {
     };
     line(WATERWAY, lerp_w(zf, 7.0, 0.6, 16.0, 3.5));
     line(FERRY, lerp_w(zf, 8.0, 0.8, 16.0, 1.5));
-    line(PATH, lerp_w(zf, 14.0, 0.8, 17.0, 1.8));
+    line(PATH, lerp_w(zf, 15.0, 0.8, 17.0, 1.8));
     line(RAIL, lerp_w(zf, 9.0, 0.8, 16.0, 2.0));
-    line(ROAD_SERVICE, lerp_w(zf, 14.0, 1.0, 17.0, 5.0));
-    line(ROAD_MINOR, lerp_w(zf, 12.5, 0.8, 17.0, 7.0));
-    line(ROAD_TERTIARY, lerp_w(zf, 11.0, 0.8, 17.0, 8.5));
-    line(ROAD_SECONDARY, lerp_w(zf, 9.0, 0.9, 17.0, 10.0));
+    line(ROAD_SERVICE, lerp_w(zf, 15.0, 1.0, 17.0, 5.0));
+    line(ROAD_MINOR, lerp_w(zf, 13.5, 0.8, 17.0, 7.0));
+    line(ROAD_TERTIARY, lerp_w(zf, 12.0, 0.8, 17.0, 8.5));
+    line(ROAD_SECONDARY, lerp_w(zf, 10.0, 0.9, 17.0, 10.0));
     line(ROAD_PRIMARY, lerp_w(zf, 7.0, 1.0, 17.0, 11.0));
     line(ROAD_TRUNK, lerp_w(zf, 6.0, 1.1, 17.0, 11.5));
     line(ROAD_MOTORWAY, lerp_w(zf, 4.5, 1.2, 17.0, 12.0));
     line(BORDER_STATE, lerp_w(zf, 3.5, 0.7, 8.0, 1.3));
     line(BORDER_COUNTRY, lerp_w(zf, 0.0, 0.9, 8.0, 1.8));
+    // Small features thin out towards the horizon of a tilted view (see vs_line).
+    for id in [PATH, ROAD_SERVICE, ROAD_MINOR, ROAD_TERTIARY, ROAD_SECONDARY, RAIL, WATERWAY, FERRY] {
+        t[id as usize][6] = 1.0;
+    }
     t
 }
 

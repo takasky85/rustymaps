@@ -167,6 +167,13 @@ struct App {
     anim_fps: u32,
     /// Time of the previous frame, for advancing the flights by real elapsed time.
     last_anim: f64,
+    labels_shown: std::collections::HashSet<u64>,
+    /// Camera as of the previous frame, to tell when the view is moving.
+    prev_cam: [f64; 7],
+    pacer: Pacer,
+    /// Frames in the last second that were caused by mouse/keyboard input.
+    input_frames: u32,
+    input_rate: u32,
     /// Index into `ui::UI_SIZES`.
     ui_size: usize,
     /// 0 = smooth (supersampled) plane edges, 1 = fast.
@@ -271,6 +278,11 @@ impl App {
             show_trains: true,
             anim_fps: 60,
             last_anim: 0.0,
+            labels_shown: Default::default(),
+            prev_cam: [0.0; 7],
+            pacer: Pacer::new(&cc.egui_ctx),
+            input_frames: 0,
+            input_rate: 0,
             ui_size: 1,
             plane_quality: 0,
             tab: None,
@@ -453,6 +465,35 @@ fn plane_redraw_interval(p: &Plane, pr: &camera::Projector, speed: f64, min_s: f
     (1.0 / px_per_s).max(min_s).min(0.25)
 }
 
+/// Wakes the UI at a steady rate while something is animating. egui's own `request_repaint_after`
+/// proved less steady than a plain timer thread (the 30 and 60 fps settings both ran at 60).
+struct Pacer {
+    interval_ms: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl Pacer {
+    fn new(ctx: &egui::Context) -> Self {
+        use std::sync::atomic::Ordering::Relaxed;
+        let interval_ms = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let (iv, ctx) = (interval_ms.clone(), ctx.clone());
+        let _ = std::thread::Builder::new().name("pacer".into()).spawn(move || loop {
+            let ms = iv.load(Relaxed);
+            std::thread::sleep(std::time::Duration::from_millis(if ms == 0 { 40 } else { ms }));
+            // Re-read: the UI may have switched the animation off while we slept.
+            if ms > 0 && iv.load(Relaxed) > 0 {
+                ctx.request_repaint();
+            }
+        });
+        Pacer { interval_ms }
+    }
+
+    /// Seconds until the next animation frame is needed, or infinity when nothing is animating.
+    fn set(&self, secs: f64) {
+        let ms = if secs.is_finite() { (secs * 1000.0).round().max(1.0) as u64 } else { 0 };
+        self.interval_ms.store(ms, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let now = ctx.input(|i| i.time);
@@ -464,11 +505,16 @@ impl eframe::App for App {
         {
             use std::sync::atomic::Ordering::Relaxed;
             self.rate_since.1 += 1;
+            if ctx.input(|i| !i.events.is_empty() || i.pointer.delta() != egui::Vec2::ZERO) {
+                self.input_frames += 1;
+            }
             if now - self.rate_since.0 >= 1.0 {
                 let (m, pl) = (gpu::MAP_REDRAWS.load(Relaxed), plane::PLANE_REDRAWS.load(Relaxed));
                 let span = (now - self.rate_since.0).max(0.001);
                 let per = |n: u64| (n as f64 / span).round() as u32;
                 self.rates = [per(self.rate_since.1 as u64), per(m - self.rate_since.2), per(pl - self.rate_since.3)];
+                self.input_rate = (self.input_frames as f64 / span).round() as u32;
+                self.input_frames = 0;
                 self.rate_since = (now, 0, m, pl);
             }
         }
@@ -509,6 +555,7 @@ impl eframe::App for App {
             self.reset_orientation(now);
         }
 
+        let mut anim_wait = f64::INFINITY; // seconds until the next animation frame is needed
         let mut rect_for_ui = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
         let mut zf_for_ui = 0.0;
 
@@ -638,13 +685,12 @@ impl eframe::App for App {
                 transit::draw(&painter, rect, &self.cam, zf, &systems, &opts)
             };
             if out.animating {
-                ctx.request_repaint_after(train_frame);
+                anim_wait = anim_wait.min(train_frame.as_secs_f64());
             }
             let line_hit = out.hit;
             for l in out.labels {
                 extras.push(Cand::from_station(l));
             }
-            transit::draw_markers(&painter, rect, &self.cam, zf, &markers);
             if let Some(mi) = marker_click {
                 let (lat, lon) = markers[mi].home;
                 self.goto_city(lon, lat, now);
@@ -680,10 +726,19 @@ impl eframe::App for App {
                 }
             }
             if self.planes.iter().any(|p| p.show && p.sim.playing) {
-                ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait.max(frame.as_secs_f64())));
+                anim_wait = anim_wait.min(wait.max(frame.as_secs_f64()));
             }
 
-            // --- the aircraft themselves: above the routes and station markers, below the labels ---
+            // --- labels ---
+            if self.show_labels {
+                let ls = LabelStyle { scale: LABEL_SIZES[self.label_size].1, bold: self.label_bold, dark: self.palette.dark(), family: fonts::Fonts::family(), real_bold: self.fonts.has_real_bold() };
+                let map_labels = if focus > 0.5 { &frame_tiles.labels[..0] } else { &frame_tiles.labels[..] };
+                let blocked = transit::marker_rects(&self.cam, rect, zf, &markers);
+                draw_labels(&painter, rect, &pr, zf, map_labels, extras, &ls, &blocked, &mut self.labels_shown);
+            }
+            // The metro symbols sit on top of the labels, then the aircraft on top of both.
+            transit::draw_markers(&painter, rect, &self.cam, zf, &markers);
+            // --- the aircraft themselves: above everything on the map, labels included ---
             // Only the part of the screen that holds a plane is rendered and composited.
             let vp = rect_px(rect, ppp);
             if let Some(bbox) = flight::plane_box(bounds, whole_screen, vp) {
@@ -694,13 +749,6 @@ impl eframe::App for App {
                     rect,
                     PlaneCallback { draws, srgb: self.srgb, bbox, supersample: self.plane_quality == 0 },
                 ));
-            }
-
-            // --- labels ---
-            if self.show_labels {
-                let ls = LabelStyle { scale: LABEL_SIZES[self.label_size].1, bold: self.label_bold, dark: self.palette.dark(), family: fonts::Fonts::family(), real_bold: self.fonts.has_real_bold() };
-                let map_labels = if focus > 0.5 { &frame_tiles.labels[..0] } else { &frame_tiles.labels[..] };
-                draw_labels(&painter, rect, &pr, zf, map_labels, extras, &ls);
             }
 
             // --- name of the highlighted subway line ---
@@ -735,6 +783,13 @@ impl eframe::App for App {
             });
         });
 
+        // While the view moves, text may sit between pixels so it glides with the map instead of
+        // stepping; at rest it snaps to the pixel grid for crispness.
+        let cam_now = [self.cam.lon, self.cam.lat, self.cam.alt, self.cam.pitch, self.cam.heading, self.cam.shift[0], self.cam.shift[1]];
+        let moving = cam_now != self.prev_cam;
+        self.prev_cam = cam_now;
+        ctx.tessellation_options_mut(|o| o.round_text_to_pixels = !moving);
+        self.pacer.set(anim_wait);
         if self.show_compass {
             self.compass(ctx, now);
         }
@@ -869,11 +924,16 @@ struct Cand {
     color: [u8; 3],
     halo: [u8; 3],
     at: egui::Pos2,
+    /// Identity across frames (hash of the text), so labels shown last frame keep their place.
+    key: u64,
 }
 
 impl Cand {
     fn new(priority: f32, text: String, size: f32, color: [u8; 3], halo: [u8; 3], at: egui::Pos2) -> Self {
-        Cand { priority, text, size, color, halo, at }
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        text.hash(&mut h);
+        Cand { priority, text, size, color, halo, at, key: h.finish() }
     }
 
     fn from_station(l: StationLabel) -> Self {
@@ -901,6 +961,8 @@ fn draw_labels(
     tiles: &[Arc<Vec<mesh::Label>>],
     mut cands: Vec<Cand>,
     ls: &LabelStyle,
+    blocked: &[egui::Rect],
+    shown: &mut std::collections::HashSet<u64>,
 ) {
     let (w, h) = (rect.width() as f64, rect.height() as f64);
     for t in tiles {
@@ -918,14 +980,22 @@ fn draw_labels(
             cands.push(Cand::new(rule.priority, text, rule.size, rule.color, rule.halo, rect.min + egui::vec2(s[0] as f32, s[1] as f32)));
         }
     }
+    // A label that was on screen last frame wins ties, so labels do not flicker in and out while
+    // the map moves.
+    for c in &mut cands {
+        if shown.contains(&c.key) {
+            c.priority -= 0.4;
+        }
+    }
     cands.sort_by(|a, b| a.priority.partial_cmp(&b.priority).unwrap_or(std::cmp::Ordering::Equal));
+    shown.clear();
 
-    let mut placed: Vec<egui::Rect> = Vec::new();
+    let mut placed: Vec<egui::Rect> = blocked.to_vec();
     let fake_bold = ls.bold && !ls.real_bold;
     let bold = if fake_bold { 0.45_f32 } else { 0.0 };
     let family = if ls.bold && ls.real_bold { fonts::Fonts::bold_family() } else { ls.family.clone() };
     for c in cands.into_iter().take(700) {
-        if placed.len() >= 220 {
+        if placed.len() >= 220 + blocked.len() {
             break;
         }
         let font = egui::FontId::new(c.size * ls.scale, family.clone());
@@ -938,6 +1008,7 @@ fn draw_labels(
             continue;
         }
         placed.push(padded);
+        shown.insert(c.key);
 
         let shadow = painter.layout_no_wrap(c.text, font, halo);
         let o = 1.3 + bold * 1.4;
