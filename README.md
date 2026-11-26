@@ -14,16 +14,16 @@ Rust + [egui](https://github.com/emilk/egui) + [wgpu](https://wgpu.rs). Map data
 | Right-drag or middle-drag | Up/down: tilt (3D perspective). Left/right: rotate around the point in the middle |
 | Mouse wheel / pinch | Zoom toward the cursor (down to street level, about zoom 19) |
 | Double-click | Fly in on that spot |
-| **R**, **Reset view**, or click the compass | North up, looking straight down |
+| **R**, **Reset view**, or click the mini globe | North up, looking straight down |
 | **Tilt** / **Rotate** sliders | The same as dragging, with numbers |
 | **Go to** menu | Fly to any city. Long trips zoom out towards a globe view and zoom back in near the city |
 | **Globe** button | Fly back out to the globe |
 | **Clear cache** button | Delete the on-disk tile cache |
 
-The **compass** (bottom right, can be switched off under *View*) points to north and shows the tilt.
+The **mini globe** (bottom right, can be switched off under *Map*) turns to show where on the planet you are, flashes a dot there, keeps the map's orientation (the red dot on its rim is north) and shows the tilt; click it to reset the view. The bar at the top shows the zoom level and, for diagnosis, frames per second and how many of them redrew the map and the planes.
 
 The **control bar** (top left) has five tabs: **Places** (the globe, San Francisco and every city with a subway map), **Map**
-(style, labels, label font, compass, subway focus), **Transit** (which cities are on, moving trains), **Flights** and **View**
+(style, labels, label font, compass, subway focus), **Transit** (moving trains and their speed), **Flights** and **View**
 (tilt/rotate sliders, reset, info). Each tab opens one compact panel, so nothing needs scrolling; click the tab again, click the
 empty map or press **Esc** to close it. The **search box** finds places (through OpenStreetMap's Nominatim service, only when you
 press Enter or *Search*) and the stations and cities of the switched-on subway maps. Clicking a metro symbol flies to that city.
@@ -53,7 +53,7 @@ The program looks for it in `%RUSTYMAPS_DATA%` (environment variable), then a `d
 `%LOCALAPPDATA%\rustymaps\data` (macOS `~/Library/Application Support/rustymaps/data`, Linux `~/.local/share/rustymaps/data`).
 Get the folder once from the **data** workflow (Actions, *data*, *Run workflow*; it also downloads any transit maps that are
 missing and commits them to `assets/transit`, so each system is only ever downloaded once) and keep it; new builds of the
-program do not need it again. A transit system without a saved file is downloaded when you switch it on, and saved.
+program do not need it again. Every city with a saved map shows up by itself when you zoom in on it (a metro symbol marks it from afar); cities without a saved file are simply not shown. About 100 systems are listed in `src/transit_data.rs` (metros, light rail and commuter/regional rail, including JR East around Tokyo); the data workflow downloads 22 missing ones per run and starts the next batch by itself until all are saved.
 
 ## Transit maps
 
@@ -63,7 +63,7 @@ MTR, Singapore MRT & LRT, Mexico City, Madrid, Berlin U-Bahn, Cairo and São Pau
 relations from OpenStreetMap) but are drawn like a subway map: thick colour-coded lines with a white outline and lettered
 roundels at the line ends, with official colours where they are known (London, New York, Paris, Tokyo, LA, Muni) and the
 colour in the OpenStreetMap data elsewhere. Zoomed out, each city whose map is saved in the data folder (those are switched on at start-up) shows a blue **metro symbol**; as you zoom in to city level the symbol fades out while the slim lines fade in, and they get thicker the closer you get. **Station circles and
-names only appear once there is room for them**: a circle needs about 18 px to its nearest neighbour, a name about 56 px. When the view is tilted the station circles can lie flat on the ground (an option). **Click a line** to highlight it (the others fade; click empty map or press Esc to clear). Simulated **trains** shuttle along every line from about zoom 10 (not a timetable, just evenly spread trains).
+names only appear once there is room for them**: a circle needs about 18 px to its nearest neighbour, a name about 56 px. When the view is tilted the station circles can lie flat on the ground (an option). **Click a line** to highlight it (the others fade; click empty map or press Esc to clear). Simulated **trains** run out and back along every line from about zoom 10 at real metro speed (about 65 km/h top speed, gentle acceleration) and stop at every station (not a timetable, just evenly spread trains; *Train speed* in the Transit tab can speed them up).
 
 Systems are plain entries in `src/transit_data.rs` (bounding box, OSM filters, standard line colours), so adding another
 city is one more entry. `rustymaps.exe --fetch-transit <folder> [system ids]` downloads maps by hand.
@@ -92,10 +92,16 @@ below each aircraft, and the aircraft are always drawn above the route lines and
 - While a tile is still loading, its nearest loaded parent tile is shown instead.
 - Labels are projected from the tiles' point features and placed by priority with simple collision avoidance.
 
+## Street names, graphics API
+
+Street names appear along the roads when you zoom in close (major roads from about zoom 13.5, side streets from about 15.5).
+Under *View* you can pick the graphics API (Automatic, Vulkan, DirectX 12 or OpenGL); it applies at the next start, and if the
+chosen one cannot start the app goes back to Automatic. The same can be forced with the `WGPU_BACKEND` environment variable.
+
 ## Cache and politeness
 
 Tiles are cached in `%LOCALAPPDATA%\rustymaps\tiles` (Windows), `~/Library/Caches/rustymaps/tiles` (macOS) or
-`~/.cache/rustymaps/tiles` (Linux). The cache is capped at **2 GB** (oldest files are removed first) and entries
+`~/.cache/rustymaps/tiles` (Linux). The cache is capped at **2 GB by default** (changeable under *View*: 256 MB to 8 GB) (oldest files are removed first) and entries
 older than 30 days are fetched again. At most 4 requests run at once, each with an identifying `User-Agent`, and failed
 tiles back off (8 s, 16 s, 32 s, 60 s) instead of being retried in a loop.
 

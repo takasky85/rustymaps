@@ -67,7 +67,36 @@ fn select_adapter(adapters: &[wgpu::Adapter], surface: Option<&wgpu::Surface<'_>
         .ok_or_else(|| "no suitable GPU adapter found".to_string())?;
     let info = best.get_info();
     eprintln!("GPU: {} ({:?}, {:?})", info.name, info.device_type, info.backend);
+    let _ = ACTIVE_GPU.set(format!("{} via {:?}", info.name, info.backend));
     Ok(best)
+}
+
+/// The GPU and graphics API in use (for the View tab).
+static ACTIVE_GPU: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Graphics APIs the user can choose between (applied at start-up).
+const BACKENDS: [(&str, wgpu::Backends); 4] = [
+    ("Automatic", wgpu::Backends::PRIMARY),
+    ("Vulkan", wgpu::Backends::VULKAN),
+    ("DirectX 12", wgpu::Backends::DX12),
+    ("OpenGL", wgpu::Backends::GL),
+];
+
+fn native_options(backends: wgpu::Backends) -> eframe::NativeOptions {
+    eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 800.0]).with_title("RustyMaps"),
+        renderer: eframe::Renderer::Wgpu,
+        wgpu_options: egui_wgpu::WgpuConfiguration {
+            wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(egui_wgpu::WgpuSetupCreateNew {
+                instance_descriptor: wgpu::InstanceDescriptor { backends, ..Default::default() },
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                native_adapter_selector: Some(Arc::new(select_adapter)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
 }
 
 fn main() -> eframe::Result {
@@ -87,20 +116,20 @@ fn main() -> eframe::Result {
         transit::fetch_to_dir(std::path::Path::new(dir), &only, max);
         return Ok(());
     }
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 800.0]).with_title("RustyMaps"),
-        renderer: eframe::Renderer::Wgpu,
-        wgpu_options: egui_wgpu::WgpuConfiguration {
-            wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(egui_wgpu::WgpuSetupCreateNew {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                native_adapter_selector: Some(Arc::new(select_adapter)),
-                ..Default::default()
-            }),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    eframe::run_native("RustyMaps", options, Box::new(|cc| Ok(Box::new(App::new(cc)))))
+    // The graphics API chosen in the View tab. If it cannot start on this computer, fall back to
+    // automatic (and forget the choice) instead of leaving the app unable to open.
+    let chosen = settings::Store::load().get::<usize>("backend").unwrap_or(0).min(BACKENDS.len() - 1);
+    let run = |backends| eframe::run_native("RustyMaps", native_options(backends), Box::new(|cc| Ok(Box::new(App::new(cc)))));
+    match run(BACKENDS[chosen].1) {
+        Err(e) if chosen != 0 => {
+            eprintln!("{} did not start ({e}); using automatic", BACKENDS[chosen].0);
+            let mut st = settings::Store::load();
+            st.set("backend", 0);
+            let _ = std::fs::write(settings::path(), st.text());
+            run(BACKENDS[0].1)
+        }
+        other => other,
+    }
 }
 
 /// A smooth camera move between two views. Long trips climb towards a globe view in the middle and
@@ -177,6 +206,8 @@ struct App {
     flat_stations: bool,
     show_trains: bool,
     train_speed: usize,
+    /// Index into BACKENDS; used the next time the app starts.
+    backend: usize,
     /// Frame rate of animations (planes, trains) when nothing else is happening.
     anim_fps: u32,
     /// Time of the previous frame, for advancing the flights by real elapsed time.
@@ -292,6 +323,7 @@ impl App {
             flat_stations: true,
             show_trains: true,
             train_speed: 0,
+            backend: 0,
             anim_fps: 60,
             last_anim: 0.0,
             labels_shown: Default::default(),

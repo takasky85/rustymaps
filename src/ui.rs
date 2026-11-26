@@ -387,6 +387,16 @@ impl App {
                 }
             }
         });
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Graphics API");
+            for (i, (name, _)) in crate::BACKENDS.iter().enumerate() {
+                ui.selectable_value(&mut self.backend, i, *name);
+            }
+        });
+        ui.small(format!(
+            "Applies the next time you start the app. Now running on: {}",
+            crate::ACTIVE_GPU.get().map(String::as_str).unwrap_or("unknown")
+        ));
         ui.small(format!("Downloaded map tiles are kept in {} (oldest are removed above the limit).", self.tiles.cache_dir().display()));
         ui.horizontal(|ui| {
             ui.label("Text size");

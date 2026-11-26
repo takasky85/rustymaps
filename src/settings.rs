@@ -77,6 +77,7 @@ impl App {
         s.set("plane_quality", self.plane_quality);
         s.set("anim_fps", self.anim_fps);
         s.set("train_speed", self.train_speed);
+        s.set("backend", self.backend);
         s.set("cache_mb", crate::tiles::cache_cap_mb());
         s.set("ui_size", self.ui_size);
         for p in &self.planes {
@@ -128,6 +129,9 @@ impl App {
         }
         if let Some(v) = s.get::<usize>("train_speed") {
             self.train_speed = v.min(crate::TRAIN_SPEEDS.len() - 1);
+        }
+        if let Some(v) = s.get::<usize>("backend") {
+            self.backend = v.min(crate::BACKENDS.len() - 1);
         }
         if let Some(v) = s.get::<u64>("cache_mb") {
             crate::tiles::set_cache_cap_mb(v);
