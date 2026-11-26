@@ -83,23 +83,44 @@ const BACKENDS: [(&str, wgpu::Backends); 4] = [
 ];
 
 fn native_options(backends: wgpu::Backends) -> eframe::NativeOptions {
+    // Start from egui's own defaults (instance flags, backend options) and change only what we need.
+    let mut setup = egui_wgpu::WgpuSetupCreateNew::default();
+    if backends != wgpu::Backends::PRIMARY {
+        setup.instance_descriptor.backends = backends;
+    }
+    setup.power_preference = wgpu::PowerPreference::HighPerformance;
+    setup.native_adapter_selector = Some(Arc::new(select_adapter));
     eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 800.0]).with_title("RustyMaps"),
         renderer: eframe::Renderer::Wgpu,
         wgpu_options: egui_wgpu::WgpuConfiguration {
-            wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(egui_wgpu::WgpuSetupCreateNew {
-                instance_descriptor: wgpu::InstanceDescriptor { backends, ..Default::default() },
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                native_adapter_selector: Some(Arc::new(select_adapter)),
-                ..Default::default()
-            }),
+            wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(setup),
             ..Default::default()
         },
         ..Default::default()
     }
 }
 
+/// The release build has no console window, so a crash would be silent. Write what happened to
+/// `crash.txt` in the user data folder (next to settings.txt) so it can be read afterwards.
+fn install_crash_log() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let text = format!("RustyMaps crashed:\n{info}\n\n{}\n", std::backtrace::Backtrace::force_capture());
+        let _ = std::fs::create_dir_all(crate::data::user_data_dir());
+        let _ = std::fs::write(crate::data::user_data_dir().join("crash.txt"), text);
+        default_hook(info);
+    }));
+}
+
+/// Record a startup failure that is returned as an error (not a panic) in the same file.
+fn log_startup_error(what: &str) {
+    let _ = std::fs::create_dir_all(crate::data::user_data_dir());
+    let _ = std::fs::write(crate::data::user_data_dir().join("crash.txt"), format!("RustyMaps could not start:\n{what}\n"));
+}
+
 fn main() -> eframe::Result {
+    install_crash_log();
     let args: Vec<String> = std::env::args().collect();
     if let Some(i) = args.iter().position(|a| a == "--fetch-transit") {
         let dir = args.get(i + 1).map(String::as_str).unwrap_or("transit");
@@ -120,7 +141,7 @@ fn main() -> eframe::Result {
     // automatic (and forget the choice) instead of leaving the app unable to open.
     let chosen = settings::Store::load().get::<usize>("backend").unwrap_or(0).min(BACKENDS.len() - 1);
     let run = |backends| eframe::run_native("RustyMaps", native_options(backends), Box::new(|cc| Ok(Box::new(App::new(cc)))));
-    match run(BACKENDS[chosen].1) {
+    let result = match run(BACKENDS[chosen].1) {
         Err(e) if chosen != 0 => {
             eprintln!("{} did not start ({e}); using automatic", BACKENDS[chosen].0);
             let mut st = settings::Store::load();
@@ -129,7 +150,11 @@ fn main() -> eframe::Result {
             run(BACKENDS[0].1)
         }
         other => other,
+    };
+    if let Err(e) = &result {
+        log_startup_error(&e.to_string());
     }
+    result
 }
 
 /// A smooth camera move between two views. Long trips climb towards a globe view in the middle and
