@@ -42,6 +42,7 @@ jobs:
           mkdir -p data/models data/transit
           cp assets/models/*.bin data/models/ || true
           cp assets/transit/*.tmap data/transit/ 2>/dev/null || true
+          cp assets/transit/*.failed data/transit/ 2>/dev/null || true
           if [ "${{ github.event.inputs.refresh }}" = "true" ]; then
             if [ -n "${{ github.event.inputs.systems }}" ]; then
               for s in ${{ github.event.inputs.systems }}; do rm -f "data/transit/$s.tmap"; done
@@ -59,10 +60,10 @@ jobs:
         timeout-minutes: 200
         run: |
           $ids = "${{ github.event.inputs.systems }}".Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries)
-          # At most 15 new systems per run, so the public servers are only asked gently; the next
+          # At most 20 new systems per run, so the public servers are only asked gently; the next
           # scheduled night continues with the ones still missing.
           $argList = @("--fetch-transit", "data/transit")
-          if ($ids.Count -eq 0) { $argList += @("--max", "15") }
+          if ($ids.Count -eq 0) { $argList += @("--max", "20") }
           $argList += $ids
           Start-Process -FilePath target/release/rustymaps.exe -ArgumentList $argList -Wait -NoNewWindow
           if (Test-Path data/transit/fetch.log) {
@@ -78,6 +79,8 @@ jobs:
         run: |
           mkdir -p assets/transit
           cp data/transit/*.tmap assets/transit/ 2>/dev/null || true
+          rm -f assets/transit/*.failed
+          cp data/transit/*.failed assets/transit/ 2>/dev/null || true
           cp data/transit/fetch.log assets/transit/fetch.log 2>/dev/null || true
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
@@ -91,7 +94,7 @@ jobs:
           $stamp = Get-Date -Format "yyMMddHHmm"
           $name = "rustymaps-data$stamp"
           New-Item -ItemType Directory -Path dist | Out-Null
-          Remove-Item data/transit/fetch.log -ErrorAction SilentlyContinue
+          Remove-Item data/transit/fetch.log, data/transit/*.failed -ErrorAction SilentlyContinue
           Compress-Archive -Path data -DestinationPath "dist/$name.zip"
           "ZIP_NAME=$name.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
 

@@ -251,7 +251,12 @@ pub fn fetch_to_dir(dir: &Path, only: &[String], max: usize) {
     };
     let mut failed = 0;
     let (mut tried, mut left_over) = (0usize, 0usize);
-    for cfg in SYSTEMS.iter().filter(|c| only.is_empty() || only.iter().any(|o| o == c.id)) {
+    // Systems that failed on an earlier night (they leave an `<id>.failed` note) go to the back of the
+    // queue, so a difficult one cannot use up every night's batch.
+    let mut queue: Vec<&transit_data::SystemConfig> =
+        SYSTEMS.iter().filter(|c| only.is_empty() || only.iter().any(|o| o == c.id)).collect();
+    queue.sort_by_key(|c| dir.join(format!("{}.failed", c.id)).is_file());
+    for cfg in queue {
         let out = dir.join(format!("{}.tmap", cfg.id));
         if out.is_file() {
             say(format!("{}: already saved, skipping", cfg.id));
@@ -264,7 +269,7 @@ pub fn fetch_to_dir(dir: &Path, only: &[String], max: usize) {
         }
         tried += 1;
         let mut done = false;
-        for attempt in 1..=5u64 {
+        for attempt in 1..=3u64 {
             say(format!("{}: attempt {attempt}", cfg.id));
             match fetch(&transit_data::overpass_query(cfg)) {
                 Ok(text) => {
@@ -293,6 +298,7 @@ pub fn fetch_to_dir(dir: &Path, only: &[String], max: usize) {
                             let packed = transit_data::encode(&d);
                             say(format!("{}: saved {} KB", cfg.id, packed.len() / 1000));
                             let _ = std::fs::write(&out, packed);
+                            let _ = std::fs::remove_file(dir.join(format!("{}.failed", cfg.id)));
                             done = true;
                         }
                         Ok(_) => say(format!("{}: answer contained no lines", cfg.id)),
@@ -308,7 +314,8 @@ pub fn fetch_to_dir(dir: &Path, only: &[String], max: usize) {
         }
         if !done {
             failed += 1;
-            say(format!("{}: gave up", cfg.id));
+            let _ = std::fs::write(dir.join(format!("{}.failed", cfg.id)), "");
+            say(format!("{}: gave up for tonight", cfg.id));
         }
         std::thread::sleep(Duration::from_secs(20)); // be gentle between systems
     }
