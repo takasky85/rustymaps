@@ -203,6 +203,220 @@ pub const SYSTEMS: &[SystemConfig] = &[
     sys("berlin", "Berlin U-Bahn", [52.35, 13.05, 52.65, 13.80], "subway", ANY, &[], (52.5200, 13.4050)),
     sys("cairo", "Cairo Metro", [29.95, 31.15, 30.20, 31.50], "subway", ANY, &[], (30.0444, 31.2357)),
     sys("saopaulo", "São Paulo Metro", [-23.75, -46.85, -23.40, -46.45], "subway", ANY, &[], (-23.5505, -46.6333)),
+
+    // ---- Japan: regional and private railways around Tokyo (the Yamanote line is JR East) ----
+    sys(
+        "jreast",
+        "JR East (Kanto)",
+        [35.10, 139.05, 36.15, 140.40],
+        "train|subway|light_rail",
+        &[r#"["operator"~"JR East|東日本旅客鉄道"]"#, r#"["network"~"JR East|JR東日本"]"#],
+        &[
+            ("", "yamanote", [154, 205, 50]),
+            ("", "山手線", [154, 205, 50]),
+            ("", "keihin-tohoku", [0, 178, 229]),
+            ("", "京浜東北線", [0, 178, 229]),
+            ("", "chuo line (rapid)", [240, 86, 37]),
+            ("", "中央線(快速)", [240, 86, 37]),
+            ("", "chuo-sobu", [255, 212, 0]),
+            ("", "中央・総武", [255, 212, 0]),
+            ("", "saikyo", [0, 172, 154]),
+            ("", "埼京線", [0, 172, 154]),
+            ("", "joban", [0, 176, 107]),
+            ("", "常磐線", [0, 176, 107]),
+            ("", "musashino", [240, 86, 37]),
+            ("", "武蔵野線", [240, 86, 37]),
+            ("", "keiyo", [200, 30, 40]),
+            ("", "京葉線", [200, 30, 40]),
+            ("", "nambu", [255, 212, 0]),
+            ("", "南武線", [255, 212, 0]),
+            ("", "tokaido", [240, 120, 40]),
+            ("", "東海道線", [240, 120, 40]),
+        ],
+        (35.6812, 139.7671),
+    ),
+    sys(
+        "tokyoprivate",
+        "Tokyo private railways",
+        [35.20, 139.20, 36.10, 140.30],
+        "train|subway|light_rail",
+        &[
+            r#"["operator"~"Tokyu|東急|Odakyu|小田急|Keio|京王|Seibu|西武|Tobu|東武|Keikyu|京急|Keisei|京成|Sotetsu|相鉄|Tsukuba Express|首都圏新都市鉄道|Yurikamome|ゆりかもめ|Rinkai|東京臨海高速鉄道|Tokyo Monorail|東京モノレール"]"#,
+        ],
+        &[],
+        (35.6586, 139.7454),
+    ),
+    sys("yokohama", "Yokohama Subway", [35.30, 139.40, 35.65, 139.75], "subway|light_rail", ANY, &[], (35.4660, 139.6226)),
+    sys("nagoya", "Nagoya Subway", [34.95, 136.75, 35.35, 137.15], "subway|light_rail", ANY, &[], (35.1709, 136.8815)),
+    sys("kyoto", "Kyoto Subway", [34.85, 135.65, 35.15, 135.90], "subway", ANY, &[], (35.0116, 135.7681)),
+    sys("fukuoka", "Fukuoka Subway", [33.50, 130.25, 33.75, 130.55], "subway", ANY, &[], (33.5902, 130.4207)),
+    sys("sapporo", "Sapporo Subway", [42.90, 141.15, 43.20, 141.55], "subway", ANY, &[], (43.0687, 141.3508)),
+    sys(
+        "jrwest",
+        "JR West (Kansai)",
+        [34.45, 135.10, 35.15, 135.95],
+        "train|subway|light_rail",
+        &[r#"["operator"~"JR West|西日本旅客鉄道"]"#, r#"["network"~"JR West|JR西日本"]"#],
+        &[],
+        (34.7025, 135.4959),
+    ),
+    // ---- United States and Canada ----
+    sys("chicago", "Chicago L", [41.65, -88.0, 42.15, -87.5], "subway|light_rail", ANY, &[], (41.8819, -87.6278)),
+    sys("boston", "Boston MBTA", [42.15, -71.30, 42.55, -70.90], "subway|light_rail", ANY, &[], (42.3555, -71.0603)),
+    sys("washington", "Washington Metro", [38.70, -77.40, 39.10, -76.80], "subway", ANY, &[], (38.8983, -77.0280)),
+    sys("philadelphia", "Philadelphia SEPTA", [39.85, -75.40, 40.15, -75.0], "subway|light_rail", ANY, &[], (39.9526, -75.1652)),
+    sys("atlanta", "Atlanta MARTA", [33.60, -84.65, 33.95, -84.20], "subway|light_rail", ANY, &[], (33.7490, -84.3880)),
+    sys("seattle", "Seattle Link", [47.40, -122.45, 47.85, -122.15], "subway|light_rail", ANY, &[], (47.6097, -122.3331)),
+    sys("portland", "Portland MAX", [45.40, -123.0, 45.65, -122.35], "light_rail", ANY, &[], (45.5202, -122.6742)),
+    sys("sandiego", "San Diego Trolley", [32.50, -117.30, 33.0, -116.90], "light_rail", ANY, &[], (32.7157, -117.1611)),
+    sys("bart", "San Francisco BART", [37.30, -122.55, 38.05, -121.75], "subway", ANY, &[], (37.7929, -122.3969)),
+    sys(
+        "caltrain",
+        "Caltrain & Bay Area rail",
+        [36.95, -122.55, 38.0, -121.55],
+        "train",
+        &[r#"["network"~"Caltrain|ACE|SMART|Capitol Corridor"]"#, r#"["operator"~"Caltrain|Peninsula Corridor"]"#],
+        &[],
+        (37.7766, -122.3948),
+    ),
+    sys("denver", "Denver RTD", [39.45, -105.25, 40.05, -104.65], "light_rail|train", &[r#"["network"~"RTD|Regional Transportation District"]"#], &[], (39.7527, -104.9998)),
+    sys("dallas", "Dallas DART", [32.55, -97.30, 33.25, -96.45], "light_rail|train", &[r#"["network"~"DART|Trinity Railway"]"#], &[], (32.7791, -96.7970)),
+    sys("houston", "Houston METRORail", [29.55, -95.55, 29.90, -95.20], "light_rail", ANY, &[], (29.7604, -95.3698)),
+    sys("miami", "Miami Metrorail", [25.55, -80.50, 26.0, -80.10], "subway|light_rail", ANY, &[], (25.7743, -80.1937)),
+    sys(
+        "nycrail",
+        "NYC commuter rail & PATH",
+        [40.40, -74.60, 41.50, -73.10],
+        "train|subway",
+        &[r#"["network"~"Metro-North|Long Island Rail Road|LIRR|PATH|NJ Transit"]"#, r#"["operator"~"Metro-North|Long Island Rail Road|PATH|NJ Transit"]"#],
+        &[],
+        (40.7527, -73.9772),
+    ),
+    sys(
+        "metra",
+        "Chicago Metra",
+        [41.40, -88.50, 42.55, -87.50],
+        "train",
+        &[r#"["operator"~"Metra"]"#, r#"["network"~"Metra"]"#],
+        &[],
+        (41.8786, -87.6406),
+    ),
+    sys(
+        "mbtarail",
+        "Boston commuter rail",
+        [41.85, -71.65, 42.95, -70.65],
+        "train",
+        &[r#"["network"~"MBTA"]"#, r#"["operator"~"MBTA|Keolis"]"#],
+        &[],
+        (42.3519, -71.0552),
+    ),
+    sys(
+        "metrolink",
+        "LA Metrolink",
+        [33.40, -118.65, 34.65, -116.90],
+        "train",
+        &[r#"["operator"~"Metrolink|Southern California Regional Rail"]"#, r#"["network"~"Metrolink"]"#],
+        &[],
+        (34.0561, -118.2365),
+    ),
+    sys("toronto", "Toronto TTC", [43.55, -79.70, 43.90, -79.10], "subway|light_rail", ANY, &[], (43.6453, -79.3806)),
+    sys("montreal", "Montréal Métro", [45.40, -73.90, 45.70, -73.45], "subway|light_rail", ANY, &[], (45.5017, -73.5673)),
+    sys("vancouver", "Vancouver SkyTrain", [49.0, -123.25, 49.35, -122.65], "subway|light_rail", ANY, &[], (49.2827, -123.1207)),
+    // ---- Europe ----
+    sys(
+        "londonrail",
+        "London Overground & Elizabeth line",
+        [51.28, -0.65, 51.75, 0.35],
+        "train|light_rail|subway",
+        &[r#"["network"~"London Overground|Elizabeth line|TfL Rail"]"#, r#"["operator"~"London Overground|Transport for London|TfL Rail"]["route"="train"]"#],
+        &[],
+        (51.5203, -0.0753),
+    ),
+    sys(
+        "pariszrail",
+        "Paris RER & Transilien",
+        [48.45, 1.90, 49.15, 2.90],
+        "train|light_rail",
+        &[r#"["network"~"RER|Transilien"]"#],
+        &[],
+        (48.8809, 2.3553),
+    ),
+    sys("berlinsbahn", "Berlin S-Bahn", [52.20, 12.90, 52.75, 13.95], "light_rail", ANY, &[], (52.5251, 13.3694)),
+    sys("munich", "Munich U- & S-Bahn", [47.95, 11.30, 48.35, 11.85], "subway|light_rail", ANY, &[], (48.1402, 11.5586)),
+    sys("hamburg", "Hamburg U- & S-Bahn", [53.35, 9.70, 53.75, 10.30], "subway|light_rail", ANY, &[], (53.5530, 10.0067)),
+    sys("frankfurt", "Frankfurt U- & S-Bahn", [49.90, 8.45, 50.30, 8.95], "subway|light_rail", ANY, &[], (50.1070, 8.6638)),
+    sys("cologne", "Cologne & Bonn Stadtbahn", [50.70, 6.75, 51.10, 7.35], "subway|light_rail", ANY, &[], (50.9430, 6.9589)),
+    sys("vienna", "Vienna U-Bahn", [48.10, 16.15, 48.35, 16.60], "subway", ANY, &[], (48.2009, 16.3689)),
+    sys("prague", "Prague Metro", [49.95, 14.25, 50.20, 14.70], "subway", ANY, &[], (50.0833, 14.4349)),
+    sys("budapest", "Budapest Metro", [47.35, 18.90, 47.65, 19.30], "subway|light_rail", ANY, &[], (47.4979, 19.0402)),
+    sys("warsaw", "Warsaw Metro", [52.05, 20.80, 52.40, 21.25], "subway", ANY, &[], (52.2297, 21.0122)),
+    sys("amsterdam", "Amsterdam Metro", [52.25, 4.70, 52.45, 5.05], "subway|light_rail", ANY, &[], (52.3791, 4.9003)),
+    sys("brussels", "Brussels Metro", [50.75, 4.20, 50.95, 4.55], "subway|light_rail", ANY, &[], (50.8503, 4.3517)),
+    sys("copenhagen", "Copenhagen Metro & S-tog", [55.50, 12.25, 55.90, 12.75], "subway|light_rail|train", &[r#"["network"~"Metro|S-tog|Metroen"]"#], &[], (55.6761, 12.5683)),
+    sys("stockholm", "Stockholm Tunnelbana", [59.15, 17.70, 59.55, 18.30], "subway|light_rail", ANY, &[], (59.3326, 18.0649)),
+    sys("oslo", "Oslo T-bane", [59.80, 10.45, 60.10, 11.0], "subway|light_rail", ANY, &[], (59.9139, 10.7522)),
+    sys("helsinki", "Helsinki Metro", [60.10, 24.60, 60.35, 25.20], "subway", ANY, &[], (60.1699, 24.9384)),
+    sys("milan", "Milan Metro", [45.30, 9.0, 45.65, 9.40], "subway", ANY, &[], (45.4642, 9.1900)),
+    sys("rome", "Rome Metro", [41.75, 12.30, 42.05, 12.70], "subway", ANY, &[], (41.9028, 12.4964)),
+    sys("barcelona", "Barcelona Metro", [41.30, 2.0, 41.55, 2.35], "subway|light_rail", ANY, &[], (41.3874, 2.1686)),
+    sys("lisbon", "Lisbon Metro", [38.65, -9.30, 38.85, -9.05], "subway", ANY, &[], (38.7223, -9.1393)),
+    sys("athens", "Athens Metro", [37.85, 23.55, 38.20, 24.0], "subway|light_rail", ANY, &[], (37.9838, 23.7275)),
+    sys("istanbul", "Istanbul Metro", [40.85, 28.55, 41.30, 29.45], "subway|light_rail", ANY, &[], (41.0082, 28.9784)),
+    sys("kyiv", "Kyiv Metro", [50.30, 30.30, 50.60, 30.85], "subway", ANY, &[], (50.4501, 30.5234)),
+    sys("stpetersburg", "Saint Petersburg Metro", [59.75, 30.05, 60.10, 30.55], "subway", ANY, &[], (59.9311, 30.3609)),
+    // ---- Asia, Middle East, Oceania, Latin America ----
+    sys("bangkok", "Bangkok BTS & MRT", [13.45, 100.30, 14.10, 100.95], "subway|light_rail", ANY, &[], (13.7563, 100.5018)),
+    sys("taipei", "Taipei Metro", [24.85, 121.35, 25.25, 121.75], "subway|light_rail", ANY, &[], (25.0478, 121.5170)),
+    sys("kualalumpur", "Kuala Lumpur Rail", [2.90, 101.40, 3.35, 101.90], "subway|light_rail", ANY, &[], (3.1390, 101.6869)),
+    sys("jakarta", "Jakarta MRT & LRT", [-6.40, 106.65, -6.10, 107.05], "subway|light_rail", ANY, &[], (-6.2088, 106.8456)),
+    sys("manila", "Manila LRT & MRT", [14.40, 120.90, 14.80, 121.20], "subway|light_rail", ANY, &[], (14.5995, 120.9842)),
+    sys("mumbai", "Mumbai Metro", [18.85, 72.75, 19.40, 73.20], "subway|light_rail", ANY, &[], (19.0760, 72.8777)),
+    sys("kolkata", "Kolkata Metro", [22.40, 88.20, 22.75, 88.50], "subway", ANY, &[], (22.5726, 88.3639)),
+    sys("bangalore", "Bengaluru Metro", [12.80, 77.40, 13.15, 77.85], "subway", ANY, &[], (12.9716, 77.5946)),
+    sys("dubai", "Dubai Metro", [24.95, 55.00, 25.40, 55.50], "subway|light_rail", ANY, &[], (25.2048, 55.2708)),
+    sys("busan", "Busan Metro", [34.95, 128.85, 35.35, 129.30], "subway|light_rail", ANY, &[], (35.1796, 129.0756)),
+    sys("tianjin", "Tianjin Metro", [38.85, 117.00, 39.35, 117.55], "subway", ANY, &[], (39.3434, 117.3616)),
+    sys("chongqing", "Chongqing Rail", [29.30, 106.30, 29.85, 106.95], "subway|light_rail", ANY, &[], (29.5630, 106.5516)),
+    sys("xian", "Xi'an Metro", [34.10, 108.75, 34.50, 109.15], "subway", ANY, &[], (34.3416, 108.9398)),
+    sys(
+        "sydney",
+        "Sydney Trains & Metro",
+        [-34.35, 150.60, -33.55, 151.45],
+        "train|subway|light_rail",
+        &[r#"["network"~"Sydney Trains|Sydney Metro|NSW TrainLink"]["route"!="bus"]"#, r#"["operator"~"Sydney Trains|Sydney Metro"]"#],
+        &[],
+        (-33.8830, 151.2060),
+    ),
+    sys(
+        "melbourne",
+        "Melbourne trains",
+        [-38.40, 144.45, -37.50, 145.50],
+        "train",
+        &[r#"["network"~"Metro Trains Melbourne|Metro Trains"]"#, r#"["operator"~"Metro Trains Melbourne"]"#],
+        &[],
+        (-37.8183, 144.9671),
+    ),
+    sys(
+        "brisbane",
+        "Brisbane trains",
+        [-27.95, 152.60, -27.0, 153.35],
+        "train|light_rail",
+        &[r#"["network"~"Queensland Rail|Translink|TransLink"]"#, r#"["operator"~"Queensland Rail|TransLink"]"#],
+        &[],
+        (-27.4698, 153.0251),
+    ),
+    sys(
+        "perth",
+        "Perth Transperth",
+        [-32.60, 115.55, -31.50, 116.15],
+        "train",
+        &[r#"["network"~"Transperth"]"#, r#"["operator"~"Transperth|Public Transport Authority"]"#],
+        &[],
+        (-31.9505, 115.8605),
+    ),
+    sys("santiago", "Santiago Metro", [-33.70, -70.85, -33.30, -70.45], "subway", ANY, &[], (-33.4372, -70.6506)),
+    sys("buenosaires", "Buenos Aires Subte", [-34.75, -58.60, -34.50, -58.30], "subway|light_rail", ANY, &[], (-34.6037, -58.3816)),
+    sys("rio", "Rio de Janeiro Metro", [-23.10, -43.45, -22.80, -43.10], "subway|light_rail", ANY, &[], (-22.9068, -43.1729)),
 ];
 
 pub struct TLine {
@@ -216,11 +430,61 @@ pub struct TLine {
     pub track: Track,
 }
 
-/// Cumulative arc length (radians) along `paths[path]`.
+/// Cumulative arc length (radians) along `paths[path]`, plus where trains stop.
 #[derive(Default)]
 pub struct Track {
     pub path: usize,
     pub cum: Vec<f64>,
+    /// Arc length of each station on the track, ascending (the ends if none were found).
+    pub stops: Vec<f64>,
+    /// One timetable cycle: out along the line and back, stopping at every station.
+    legs: Vec<Leg>,
+    cycle: f64,
+}
+
+/// One stop-and-go leg of a train's cycle: wait `dwell` s at `from`, then drive to `to`.
+struct Leg {
+    start: f64,
+    from: f64,
+    to: f64,
+    dwell: f64,
+    travel: f64,
+}
+
+pub const EARTH_RADIUS_M: f64 = 6_371_000.0;
+/// Top speed, acceleration and station stop of the simulated trains (a typical metro).
+pub const TRAIN_VMAX: f64 = 18.0;
+const TRAIN_ACC: f64 = 1.0;
+const TRAIN_DWELL: f64 = 25.0;
+
+/// Seconds to drive `d` metres from rest to rest: accelerate, cruise, brake.
+fn drive_time(d: f64) -> f64 {
+    let d_acc = TRAIN_VMAX * TRAIN_VMAX / (2.0 * TRAIN_ACC);
+    if d >= 2.0 * d_acc {
+        2.0 * TRAIN_VMAX / TRAIN_ACC + (d - 2.0 * d_acc) / TRAIN_VMAX
+    } else {
+        2.0 * (d / TRAIN_ACC).sqrt()
+    }
+}
+
+/// Fraction (0..=1) of the way after `t` seconds of a drive of `d` metres that takes `total` s.
+fn drive_fraction(d: f64, total: f64, t: f64) -> f64 {
+    if d <= 0.0 || total <= 0.0 {
+        return 1.0;
+    }
+    let vpeak = TRAIN_VMAX.min((TRAIN_ACC * d).sqrt());
+    let t_acc = vpeak / TRAIN_ACC;
+    let d_acc = vpeak * vpeak / (2.0 * TRAIN_ACC);
+    let t = t.clamp(0.0, total);
+    let pos = if t < t_acc {
+        0.5 * TRAIN_ACC * t * t
+    } else if t < total - t_acc {
+        d_acc + vpeak * (t - t_acc)
+    } else {
+        let rem = total - t;
+        d - 0.5 * TRAIN_ACC * rem * rem
+    };
+    (pos / d).clamp(0.0, 1.0)
 }
 
 impl Track {
@@ -240,6 +504,47 @@ impl Track {
 
     pub fn length(&self) -> f64 {
         self.cum.last().copied().unwrap_or(0.0)
+    }
+
+    /// Seconds for a train to go out and come back, with every stop.
+    pub fn cycle_seconds(&self) -> f64 {
+        self.cycle
+    }
+
+    /// Arc length (radians) of a train `t` seconds into its cycle: it accelerates, cruises, brakes,
+    /// waits at each station, and turns round at the ends.
+    pub fn s_at(&self, t: f64) -> f64 {
+        if self.legs.is_empty() || self.cycle <= 0.0 {
+            return 0.0;
+        }
+        let t = t.rem_euclid(self.cycle);
+        let i = self.legs.partition_point(|l| l.start <= t).saturating_sub(1);
+        let l = &self.legs[i];
+        let into = t - l.start;
+        if into < l.dwell {
+            return l.from;
+        }
+        let d = (l.to - l.from).abs() * EARTH_RADIUS_M;
+        l.from + (l.to - l.from) * drive_fraction(d, l.travel, into - l.dwell)
+    }
+
+    /// Builds the timetable from the stop positions.
+    fn schedule(&mut self) {
+        self.legs.clear();
+        self.cycle = 0.0;
+        if self.stops.len() < 2 {
+            return;
+        }
+        let n = self.stops.len();
+        let order: Vec<usize> = (0..n).chain((0..n - 1).rev()).collect();
+        let mut t = 0.0;
+        for w in order.windows(2).chain(std::iter::once(&[order[n * 2 - 2], order[0]][..])) {
+            let (from, to) = (self.stops[w[0]], self.stops[w[1]]);
+            let travel = drive_time((to - from).abs() * EARTH_RADIUS_M);
+            self.legs.push(Leg { start: t, from, to, dwell: TRAIN_DWELL, travel });
+            t += TRAIN_DWELL + travel;
+        }
+        self.cycle = t;
     }
 }
 
@@ -263,7 +568,7 @@ impl SystemData {
     /// Computes `center` and `radius`; call after the lines are filled in.
     pub fn finish(&mut self) {
         // The main path of each line (the one the end-of-line roundels sit on) is where trains run.
-        for line in &mut self.lines {
+        for (li, line) in self.lines.iter_mut().enumerate() {
             let Some((pi, path)) = line.paths.iter().enumerate().max_by_key(|(_, p)| p.len()) else { continue };
             let mut cum = Vec::with_capacity(path.len());
             let mut acc = 0.0f64;
@@ -273,7 +578,35 @@ impl SystemData {
                 }
                 cum.push(acc);
             }
-            line.track = Track { path: pi, cum };
+            // Where this line's stations sit along its main path (within 250 m of it).
+            let mut stops: Vec<f64> = Vec::new();
+            for st in self.stations.iter().filter(|st| st.lines.contains(&li)) {
+                let mut best = (f64::MAX, 0.0f64);
+                for k in 1..path.len() {
+                    let (p, q) = (path[k - 1], path[k]);
+                    let d = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
+                    let len2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+                    let x = [st.pos[0] - p[0], st.pos[1] - p[1], st.pos[2] - p[2]];
+                    let t = if len2 <= 1e-30 { 0.0 } else { ((x[0] * d[0] + x[1] * d[1] + x[2] * d[2]) / len2).clamp(0.0, 1.0) };
+                    let e = [x[0] - d[0] * t, x[1] - d[1] * t, x[2] - d[2] * t];
+                    let dist = (e[0] * e[0] + e[1] * e[1] + e[2] * e[2]).sqrt();
+                    if dist < best.0 {
+                        best = (dist, cum[k - 1] + (cum[k] - cum[k - 1]) * t);
+                    }
+                }
+                if best.0 * EARTH_RADIUS_M < 250.0 {
+                    stops.push(best.1);
+                }
+            }
+            stops.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            // one stop per station (platforms of one station can be a few metres apart)
+            stops.dedup_by(|b, a| (*b - *a) * EARTH_RADIUS_M < 150.0);
+            let end = cum.last().copied().unwrap_or(0.0);
+            if stops.len() < 2 {
+                stops = vec![0.0, end];
+            }
+            line.track = Track { path: pi, cum, stops, ..Default::default() };
+            line.track.schedule();
         }
         let mut sum = [0.0f64; 3];
         let mut n = 0usize;
@@ -720,6 +1053,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn system_ids_are_unique_and_sane() {
+        for (i, c) in SYSTEMS.iter().enumerate() {
+            assert!(!SYSTEMS[..i].iter().any(|o| o.id == c.id), "duplicate id {}", c.id);
+            assert!(c.id.chars().all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit()), "{}", c.id);
+            let [s, w, n, e] = c.bbox;
+            assert!(s < n && w < e && s >= -90.0 && n <= 90.0 && w >= -180.0 && e <= 180.0, "{} bbox", c.id);
+            let (lat, lon) = c.home;
+            assert!(lat >= s - 0.3 && lat <= n + 0.3 && lon >= w - 0.3 && lon <= e + 0.3, "{} home outside its box", c.id);
+            assert!(!c.filters.is_empty(), "{}", c.id);
+        }
+        assert!(SYSTEMS.len() <= 100, "{}", SYSTEMS.len());
+    }
+
+    #[test]
     fn chain_joins_ways_in_any_orientation() {
         let ways = vec![
             vec![(0.0, 0.0), (1.0, 0.0)],
@@ -828,6 +1175,43 @@ mod tests {
         assert_eq!(d.stations.iter().filter(|s| s.name == "Shibuya").count(), 1);
         // Asakusa has only a Japanese name: kept as an unnamed dot
         assert!(d.stations.iter().any(|s| s.name.is_empty() && s.lines == vec![0]));
+    }
+
+    #[test]
+    fn trains_stop_at_stations_and_drive_at_metro_speeds() {
+        let d = parse(&SYSTEMS[2], SAMPLE).unwrap();
+        let t = &d.lines[0].track;
+        assert!(t.stops.len() >= 2);
+        assert!(t.cycle_seconds() > 0.0);
+        let (mut waited, mut max_v) = (0u32, 0.0f64);
+        let mut prev = t.s_at(0.0);
+        for k in 1..(t.cycle_seconds() as u32 * 2) {
+            let s = t.s_at(k as f64);
+            let v = (s - prev).abs() * EARTH_RADIUS_M; // metres in the last second
+            if v < 1e-6 {
+                waited += 1;
+            }
+            max_v = max_v.max(v);
+            prev = s;
+        }
+        assert!(waited >= 20, "trains must wait at stations ({waited} s)");
+        assert!(max_v <= TRAIN_VMAX + 0.5, "no faster than {TRAIN_VMAX} m/s, saw {max_v}");
+        assert!((t.s_at(0.0) - t.s_at(t.cycle_seconds())).abs() < 1e-9, "the cycle repeats");
+    }
+
+    #[test]
+    fn drive_profile_is_smooth_and_complete() {
+        for d in [150.0, 400.0, 900.0, 5000.0] {
+            let total = drive_time(d);
+            assert!((drive_fraction(d, total, 0.0)).abs() < 1e-9);
+            assert!((drive_fraction(d, total, total) - 1.0).abs() < 1e-9);
+            let mut prev = 0.0;
+            for k in 0..=100 {
+                let f = drive_fraction(d, total, total * k as f64 / 100.0);
+                assert!(f >= prev - 1e-12);
+                prev = f;
+            }
+        }
     }
 
     #[test]

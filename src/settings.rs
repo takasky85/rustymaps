@@ -76,17 +76,12 @@ impl App {
         s.set("exaggeration", self.exaggeration);
         s.set("plane_quality", self.plane_quality);
         s.set("anim_fps", self.anim_fps);
+        s.set("train_speed", self.train_speed);
+        s.set("cache_mb", crate::tiles::cache_cap_mb());
         s.set("ui_size", self.ui_size);
         for p in &self.planes {
             s.set(&format!("plane_{}", p.def.model), p.show);
         }
-        let off: Vec<&str> = crate::transit_data::SYSTEMS
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| self.transit.offline(*i) && !self.transit.enabled(*i))
-            .map(|(_, c)| c.id)
-            .collect();
-        s.set("transit_off", off.join(","));
         s.text()
     }
 
@@ -131,6 +126,12 @@ impl App {
         if let Some(v) = s.get::<u32>("anim_fps") {
             self.anim_fps = v.clamp(10, 120);
         }
+        if let Some(v) = s.get::<usize>("train_speed") {
+            self.train_speed = v.min(crate::TRAIN_SPEEDS.len() - 1);
+        }
+        if let Some(v) = s.get::<u64>("cache_mb") {
+            crate::tiles::set_cache_cap_mb(v);
+        }
         if let Some(v) = s.get::<usize>("plane_quality") {
             self.plane_quality = v.min(1);
         }
@@ -142,13 +143,6 @@ impl App {
         for p in &mut self.planes {
             if let Some(v) = s.get::<bool>(&format!("plane_{}", p.def.model)) {
                 p.show = v;
-            }
-        }
-        if let Some(off) = s.get::<String>("transit_off") {
-            for id in off.split(',').filter(|x| !x.is_empty()) {
-                if let Some(i) = crate::transit_data::SYSTEMS.iter().position(|c| c.id == id) {
-                    self.transit.set_enabled(i, false);
-                }
             }
         }
         crate::ui::apply_scale(ctx, crate::ui::UI_SIZES[self.ui_size].1);

@@ -438,6 +438,17 @@ fn label_rule_light(kind: Kind, rank: u32, zf: f64) -> Option<LabelRule> {
             priority: 40.0 + r,
             upper: false,
         }),
+        // Street names: rank is the road class (0 motorway .. 6 service); smaller roads need more zoom.
+        Kind::Street => {
+            let from = [13.5, 13.5, 13.5, 14.5, 15.0, 15.5, 16.5][rank.min(6) as usize];
+            (zf >= from).then_some(LabelRule {
+                size: 11.0,
+                color: [75, 75, 85],
+                halo: white,
+                priority: 50.0 + rank.min(6) as f32,
+                upper: false,
+            })
+        }
     }
 }
 

@@ -8,7 +8,6 @@ use eframe::egui::{self, Color32, RichText};
 use crate::camera::{vec_to_lonlat, MAX_PITCH};
 use crate::search::Hit;
 use crate::style::Palette;
-use crate::transit::Status;
 use crate::transit_data::SYSTEMS;
 use crate::{App, CITY_ZOOM, LABEL_SIZES, SF_LAT, SF_LON, SPEEDS};
 
@@ -79,7 +78,8 @@ impl App {
 
     pub(crate) fn controls(&mut self, ctx: &egui::Context, rect: egui::Rect, now: f64, zf: f64) {
         let k = self.k();
-        let avail_h = (rect.height() - 80.0 * k).max(240.0);
+        // The tab panels reach almost to the bottom of the window.
+        let avail_h = (rect.height() - (14.0 + 34.0 * k) - 28.0).max(240.0);
 
         // ---- the bar ----
         egui::Area::new(egui::Id::new("bar")).anchor(egui::Align2::LEFT_TOP, egui::vec2(8.0, 8.0)).order(egui::Order::Foreground).show(ctx, |ui| {
@@ -125,7 +125,8 @@ impl App {
             egui::Area::new(egui::Id::new("panel")).anchor(egui::Align2::LEFT_TOP, pos).order(egui::Order::Foreground).show(ctx, |ui| {
                 frame(ctx).show(ui, |ui| {
                     ui.set_width(self.panel_w());
-                    egui::ScrollArea::vertical().max_height(avail_h).auto_shrink([true, true]).show(ui, |ui| match tab {
+                    ui.set_min_height(avail_h);
+                    egui::ScrollArea::vertical().max_height(avail_h).auto_shrink([false, false]).show(ui, |ui| match tab {
                         Tab::Places => self.tab_places(ui, now),
                         Tab::Map => self.tab_map(ctx, ui),
                         Tab::Transit => self.tab_transit(ui),
@@ -217,7 +218,7 @@ impl App {
             ui.small(if self.fonts.has_real_bold() { "Fonts installed on this computer; this one has a real bold face." } else { "Fonts installed on this computer; bold is faked for this one (pick another for real bold)." });
         });
         ui.separator();
-        ui.checkbox(&mut self.show_compass, "Compass");
+        ui.checkbox(&mut self.show_compass, "Mini globe (bottom right)");
         ui.checkbox(&mut self.transit_focus, "Subway focus: dim the map, hide its labels");
         if self.transit_focus {
             ui.add(egui::Slider::new(&mut self.map_dim, 0.0..=0.85).text("Dim"));
@@ -228,54 +229,25 @@ impl App {
 
     // ---------------------------------------------------------------- Transit
 
-    fn transit_row(&mut self, ui: &mut egui::Ui, i: usize) {
-        let mut on = self.transit.enabled(i);
-        ui.horizontal(|ui| {
-            if ui.checkbox(&mut on, SYSTEMS[i].title).changed() {
-                self.transit.set_enabled(i, on);
-            }
-            match self.transit.status(i) {
-                Status::Loading => {
-                    ui.spinner();
-                }
-                Status::Failed(e) => {
-                    ui.colored_label(Color32::LIGHT_RED, "failed").on_hover_text(e);
-                }
-                _ => {}
-            }
-        });
-    }
-
     fn tab_transit(&mut self, ui: &mut egui::Ui) {
-        ui.checkbox(&mut self.show_trains, "Moving trains (simulated, not a timetable)");
-        ui.small("Click a line to highlight it. Click empty map, or press Esc, to clear.");
+        let have: Vec<&str> = (0..SYSTEMS.len()).filter(|&i| self.transit.offline(i)).map(|i| SYSTEMS[i].title).collect();
+        ui.label(format!("{} city maps are installed. They appear by themselves when you zoom in on the city.", have.len()));
+        ui.small("Zoomed out, each city shows a metro symbol; click it to fly there. Click a line to highlight it; click empty map or press Esc to clear.");
         ui.separator();
-        ui.label(RichText::new("Saved on this computer").strong());
-        let saved: Vec<usize> = (0..SYSTEMS.len()).filter(|&i| self.transit.offline(i)).collect();
-        if saved.is_empty() {
-            ui.weak("none yet: run the data workflow, or switch one on below");
-        }
-        egui::Grid::new("tr_saved").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
-            for (n, &i) in saved.iter().enumerate() {
-                self.transit_row(ui, i);
-                if n % 2 == 1 {
-                    ui.end_row();
+        ui.checkbox(&mut self.show_trains, "Moving trains (simulated, not a timetable)");
+        ui.add_enabled_ui(self.show_trains, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Train speed");
+                for (i, (name, _)) in crate::TRAIN_SPEEDS.iter().enumerate() {
+                    ui.selectable_value(&mut self.train_speed, i, *name);
                 }
-            }
-        });
-        let more: Vec<usize> = (0..SYSTEMS.len()).filter(|&i| !self.transit.offline(i)).collect();
-        if !more.is_empty() {
-            egui::CollapsingHeader::new(format!("More cities ({}), downloaded when switched on", more.len())).default_open(false).show(ui, |ui| {
-                egui::Grid::new("tr_more").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
-                    for (n, &i) in more.iter().enumerate() {
-                        self.transit_row(ui, i);
-                        if n % 2 == 1 {
-                            ui.end_row();
-                        }
-                    }
-                });
             });
-        }
+            ui.small("Real time: about 65 km/h between stops, stopping at every station.");
+        });
+        ui.separator();
+        egui::CollapsingHeader::new("Installed cities").default_open(false).show(ui, |ui| {
+            ui.label(have.join(" · "));
+        });
         ui.small(format!("Maps are read from {}", self.transit.dir().join("transit").display()));
     }
 
@@ -401,6 +373,21 @@ impl App {
                 self.tiles.clear_cache();
             }
         });
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Tile cache limit");
+            let before = crate::tiles::cache_cap_mb();
+            let mut mb = before;
+            for (name, v) in [("256 MB", 256u64), ("512 MB", 512), ("1 GB", 1024), ("2 GB", 2048), ("4 GB", 4096), ("8 GB", 8192)] {
+                ui.selectable_value(&mut mb, v, name);
+            }
+            if mb != before {
+                crate::tiles::set_cache_cap_mb(mb);
+                if mb < before {
+                    self.tiles.trim_cache();
+                }
+            }
+        });
+        ui.small(format!("Downloaded map tiles are kept in {} (oldest are removed above the limit).", self.tiles.cache_dir().display()));
         ui.horizontal(|ui| {
             ui.label("Text size");
             let before = self.ui_size;

@@ -46,6 +46,8 @@ pub enum Kind {
     Village,
     Suburb,
     Island,
+    /// A street name, running along its road.
+    Street,
 }
 
 #[derive(Clone, Debug)]
@@ -56,6 +58,10 @@ pub struct Label {
     pub text: String,
     pub kind: Kind,
     pub rank: u32,
+    /// Street names only: direction of the road (unit vector in mercator, y down) and the length
+    /// of the road piece in the tile (mercator units). Zero for everything else.
+    pub dir: [f32; 2],
+    pub span: f32,
 }
 
 #[derive(Default)]
@@ -210,6 +216,14 @@ impl Builder {
             "place" | "water_name" => {
                 for f in &layer.features {
                     self.label(layer, f, scale);
+                }
+            }
+            "transportation_name" => {
+                // street names only matter (and only fit) when zoomed in close
+                if self.id.z >= 13 {
+                    for f in &layer.features {
+                        self.street_label(layer, f, scale);
+                    }
                 }
             }
             _ => {}
@@ -374,6 +388,68 @@ impl Builder {
             text,
             kind,
             rank: layer.num_prop(f, "rank").map(|r| r as u32).unwrap_or(50),
+            dir: [0.0, 0.0],
+            span: 0.0,
+        });
+    }
+
+    /// A street name at the middle of a named road, turned along it.
+    fn street_label(&mut self, layer: &Layer, f: &Feature, scale: f32) {
+        if f.geom_type != 2 {
+            return;
+        }
+        let rank = match layer.str_prop(f, "class") {
+            Some("motorway") => 0,
+            Some("trunk") => 1,
+            Some("primary") => 2,
+            Some("secondary") => 3,
+            Some("tertiary") => 4,
+            Some("minor") => 5,
+            Some("service") | Some("pedestrian") | Some("path") | Some("track") => 6,
+            _ => return,
+        };
+        let Some(text) = pick_name(layer, f) else { return };
+        let paths = f.paths();
+        // the longest piece of the road
+        let Some(path) = paths.iter().max_by_key(|p| p.len()) else { return };
+        if path.len() < 2 {
+            return;
+        }
+        let pts: Vec<[f32; 2]> = path.iter().map(|&(x, y)| [x as f32 * scale, y as f32 * scale]).collect();
+        let total: f32 = pts.windows(2).map(|w| dist2(w[0], w[1]).sqrt()).sum();
+        if total <= 1.0 {
+            return;
+        }
+        // walk to the middle
+        let mut left = total * 0.5;
+        let mut at = pts[0];
+        let mut dir = [1.0f32, 0.0];
+        for w in pts.windows(2) {
+            let seg = dist2(w[0], w[1]).sqrt();
+            if seg <= 1e-6 {
+                continue;
+            }
+            dir = [(w[1][0] - w[0][0]) / seg, (w[1][1] - w[0][1]) / seg];
+            if left <= seg {
+                at = [w[0][0] + dir[0] * left, w[0][1] + dir[1] * left];
+                break;
+            }
+            left -= seg;
+            at = w[1];
+        }
+        // Middles in the tile's buffer zone belong to the neighbouring tile.
+        if at[0] < 0.0 || at[1] < 0.0 || at[0] >= EXTENT || at[1] >= EXTENT {
+            return;
+        }
+        let n = (1u64 << self.id.z) as f64;
+        self.labels.push(Label {
+            mx: (self.id.x as f64 + at[0] as f64 / EXTENT as f64) / n,
+            my: (self.id.y as f64 + at[1] as f64 / EXTENT as f64) / n,
+            text,
+            kind: Kind::Street,
+            rank,
+            dir,
+            span: (total as f64 / EXTENT as f64 / n) as f32,
         });
     }
 }
@@ -459,6 +535,34 @@ mod tests {
         assert_eq!(mesh.lines.iter().filter(|l| l.style == st::BORDER_COUNTRY).count(), 1);
         assert_eq!(mesh.lines.iter().filter(|l| l.style == st::BORDER_STATE).count(), 1);
         assert_eq!(mesh.lines.len(), 2);
+    }
+
+    #[test]
+    fn street_names_sit_mid_road_and_follow_its_direction() {
+        let data = tile(
+            "transportation_name",
+            vec![
+                Feat {
+                    geom: Geom::Line(vec![(1000, 2000), (3000, 2000)]),
+                    props: vec![("class", Val::S("minor")), ("name", Val::S("Main Street"))],
+                },
+                Feat {
+                    geom: Geom::Line(vec![(1000, 1000), (3000, 1000)]),
+                    props: vec![("class", Val::S("minor"))],
+                },
+            ],
+        );
+        let mesh = build_mesh(TileId { z: 14, x: 3, y: 5 }, &data).unwrap();
+        assert_eq!(mesh.labels.len(), 1, "unnamed roads get no label");
+        let l = &mesh.labels[0];
+        assert_eq!(l.kind, Kind::Street);
+        assert!(l.dir[0].abs() > 0.99 && l.dir[1].abs() < 0.01);
+        let n = 16384.0;
+        assert!((l.mx - (3.0 + 2000.0 / 4096.0) / n).abs() < 1e-9, "{}", l.mx);
+        assert!(l.span > 0.0);
+        // not built for low zoom tiles
+        let low = build_mesh(TileId { z: 8, x: 3, y: 5 }, &data).unwrap();
+        assert!(low.labels.is_empty());
     }
 
     #[test]

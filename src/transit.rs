@@ -238,7 +238,7 @@ fn fetch(query: &str) -> Result<String, String> {
 /// Headless mode (`rustymaps --fetch-transit <dir> [id ...]`): downloads systems with patient retries and
 /// writes `<dir>/<id>.tmap` plus `<dir>/fetch.log`. Systems that already have a file are skipped, so a
 /// second run only fills the gaps. Used by the Data workflow; handy by hand when the servers are calm.
-pub fn fetch_to_dir(dir: &Path, only: &[String]) {
+pub fn fetch_to_dir(dir: &Path, only: &[String], max: usize) {
     use std::io::Write;
     let _ = std::fs::create_dir_all(dir);
     let mut log = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("fetch.log")).ok();
@@ -250,12 +250,19 @@ pub fn fetch_to_dir(dir: &Path, only: &[String]) {
         }
     };
     let mut failed = 0;
+    let (mut tried, mut left_over) = (0usize, 0usize);
     for cfg in SYSTEMS.iter().filter(|c| only.is_empty() || only.iter().any(|o| o == c.id)) {
         let out = dir.join(format!("{}.tmap", cfg.id));
         if out.is_file() {
             say(format!("{}: already saved, skipping", cfg.id));
             continue;
         }
+        // A batch size keeps one run short enough; the workflow starts the next batch by itself.
+        if max > 0 && tried >= max {
+            left_over += 1;
+            continue;
+        }
+        tried += 1;
         let mut done = false;
         for attempt in 1..=5u64 {
             say(format!("{}: attempt {attempt}", cfg.id));
@@ -305,7 +312,8 @@ pub fn fetch_to_dir(dir: &Path, only: &[String]) {
         }
         std::thread::sleep(Duration::from_secs(8)); // be gentle between systems
     }
-    say(format!("finished, {failed} system(s) missing"));
+    say(format!("finished, {failed} system(s) missing, {left_over} left for the next batch"));
+    let _ = std::fs::write(dir.join("remaining.txt"), (failed + left_over).to_string());
 }
 
 // ---------------------------------------------------------------------------
@@ -532,6 +540,8 @@ pub struct Opts<'a> {
     pub trains: bool,
     /// Seconds, for moving the trains.
     pub now: f64,
+    /// 1 = real time; larger runs the trains faster.
+    pub train_speed: f64,
     /// Where the user just clicked (screen position), to find which line was hit.
     pub pick: Option<Pos2>,
     /// The highlighted line: its system and its index there.
@@ -544,13 +554,15 @@ pub struct Out {
     pub hit: Option<(Arc<SystemData>, usize)>,
     /// Trains are moving, so the caller should keep repainting.
     pub animating: bool,
+    /// How fast the fastest train crosses the screen (pixels per second), to pick a redraw rate.
+    pub motion_px_s: f32,
 }
 
-/// Simulated trains: not a timetable, just evenly spread trains shuttling along each line.
-const TRAIN_SPEED_MS: f64 = 200.0;
+/// Simulated trains: not a timetable, just evenly spread trains running out and back along each
+/// line at real metro speeds, stopping at the stations.
 const TRAIN_SPACING_KM: f64 = 2.5;
 const TRAINS_FROM: f64 = 10.0;
-const EARTH_RADIUS_M: f64 = 6_371_000.0;
+use crate::transit_data::{EARTH_RADIUS_M, TRAIN_VMAX};
 
 fn dist_to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
     let ab = b - a;
@@ -561,18 +573,6 @@ fn dist_to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
 
 fn dist_to_polyline(p: Pos2, pts: &[Pos2]) -> f32 {
     pts.windows(2).map(|w| dist_to_segment(p, w[0], w[1])).fold(f32::INFINITY, f32::min)
-}
-
-/// Number of trains on a line of `len_rad` radians, and where train `k` of them is along a
-/// there-and-back trip at time `now` (arc length in radians, 0..=len).
-fn train_s(len_rad: f64, n: usize, k: usize, now: f64) -> f64 {
-    let speed = TRAIN_SPEED_MS / EARTH_RADIUS_M;
-    let u = ((k as f64 + 0.37) / n as f64 * 2.0 * len_rad + now * speed).rem_euclid(2.0 * len_rad);
-    if u < len_rad {
-        u
-    } else {
-        2.0 * len_rad - u
-    }
 }
 
 fn train_count(len_rad: f64) -> usize {
@@ -587,7 +587,7 @@ pub fn draw(
     systems: &[Arc<SystemData>],
     o: &Opts,
 ) -> Out {
-    let mut out = Out { labels: Vec::new(), hit: None, animating: false };
+    let mut out = Out { labels: Vec::new(), hit: None, animating: false, motion_px_s: 0.0 };
     let fade_a = map_fade(zf);
     if fade_a <= 0.01 || systems.is_empty() {
         return out;
@@ -715,8 +715,10 @@ pub fn draw(
                 }
                 let n = train_count(len);
                 let c = line.color;
+                let cycle = line.track.cycle_seconds();
                 for k in 0..n {
-                    let Some(p) = line.track.point_at(&line.paths, train_s(len, n, k, o.now)) else { continue };
+                    let t = o.now * o.train_speed + cycle * (k as f64 + 0.37) / n as f64;
+                    let Some(p) = line.track.point_at(&line.paths, line.track.s_at(t)) else { continue };
                     if let Some(s) = to_screen(p) {
                         if on_screen.contains(s) {
                             trains.push((s, fade(Color32::from_rgb(c[0], c[1], c[2]), train_a)));
@@ -772,6 +774,8 @@ pub fn draw(
             painter.circle(s, r, fade(Color32::WHITE, train_a), Stroke::new(2.4_f32, col));
         }
         out.animating = true;
+        let metres_per_px = 2.0 * std::f64::consts::PI * EARTH_RADIUS_M * cam.lat.cos().max(0.05) / (512.0 * 2f64.powf(zf));
+        out.motion_px_s = (TRAIN_VMAX * o.train_speed / metres_per_px) as f32;
     }
     out
 }
@@ -844,19 +848,11 @@ mod tests {
     }
 
     #[test]
-    fn trains_shuttle_end_to_end_and_are_spread_out() {
-        let len = 0.001; // about 6 km
-        let n = train_count(len);
-        assert!((2..=14).contains(&n));
-        for step in 0..200 {
-            for k in 0..n {
-                let s = train_s(len, n, k, step as f64 * 7.0);
-                assert!((0.0..=len).contains(&s), "{s}");
-            }
+    fn a_sensible_number_of_trains_per_line() {
+        for len_km in [1.0, 6.0, 30.0, 200.0] {
+            let n = train_count(len_km * 1000.0 / EARTH_RADIUS_M);
+            assert!((2..=14).contains(&n), "{n}");
         }
-        let a = train_s(len, n, 0, 0.0);
-        let b = train_s(len, n, 1, 0.0);
-        assert!((a - b).abs() > 1e-6, "trains must not sit on top of each other");
     }
 
     #[test]

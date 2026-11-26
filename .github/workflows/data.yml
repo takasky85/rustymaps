@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   data:
@@ -54,7 +55,11 @@ jobs:
         timeout-minutes: 200
         run: |
           $ids = "${{ github.event.inputs.systems }}".Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries)
-          $argList = @("--fetch-transit", "data/transit") + $ids
+          # At most 22 new systems per run (the public servers are slow); the last step of this
+          # workflow starts the next batch by itself while maps are still missing.
+          $argList = @("--fetch-transit", "data/transit")
+          if ($ids.Count -eq 0) { $argList += @("--max", "22") }
+          $argList += $ids
           Start-Process -FilePath target/release/rustymaps.exe -ArgumentList $argList -Wait -NoNewWindow
           if (Test-Path data/transit/fetch.log) {
             Get-Content data/transit/fetch.log
@@ -64,6 +69,7 @@ jobs:
           }
 
       - name: Save new maps in the repository
+        id: save
         shell: bash
         run: |
           mkdir -p assets/transit
@@ -72,7 +78,18 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
           git add assets/transit
-          if git diff --cached --quiet; then echo "nothing new"; else git commit -m "Update transit data [skip ci]" && git pull --rebase origin main && git push; fi
+          if git diff --cached --quiet; then echo "nothing new"; else git commit -m "Update transit data [skip ci]" && git pull --rebase origin main && git push && echo "committed=true" >> "$GITHUB_OUTPUT"; fi
+
+      # More systems still missing and this run added some: carry on with the next batch.
+      - name: Start the next batch
+        if: steps.save.outputs.committed == 'true' && github.event.inputs.systems == '' && github.event.inputs.refresh != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          left=$(cat data/transit/remaining.txt 2>/dev/null || echo 0)
+          echo "still missing or left over: $left"
+          if [ "$left" -gt 0 ]; then gh workflow run data.yml --ref main; fi
 
       - name: Package
         if: always()

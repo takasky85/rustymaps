@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -31,8 +31,20 @@ const MAX_ENTRIES: usize = 700;
 const MAX_UPLOADS_PER_FRAME: usize = 12;
 /// Upper bound on tiles considered per frame.
 const MAX_VISIBLE: usize = 100;
-/// Disk cache size limit.
-const CACHE_CAP_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// Disk cache size limit in MB (changeable in the View tab, saved with the other settings).
+static CACHE_CAP_MB: AtomicU64 = AtomicU64::new(2048);
+
+pub fn set_cache_cap_mb(mb: u64) {
+    CACHE_CAP_MB.store(mb.clamp(64, 65536), Ordering::Relaxed);
+}
+
+pub fn cache_cap_mb() -> u64 {
+    CACHE_CAP_MB.load(Ordering::Relaxed)
+}
+
+fn cache_cap_bytes() -> u64 {
+    cache_cap_mb() * 1024 * 1024
+}
 /// Cached tiles older than this are fetched again.
 const CACHE_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 3600);
 
@@ -113,9 +125,10 @@ impl DiskCache {
             }
         }
         let mut total: u64 = files.iter().map(|f| f.1).sum();
-        if total > CACHE_CAP_BYTES {
+        let cap = cache_cap_bytes();
+        if total > cap {
             files.sort_by_key(|f| f.0);
-            let target = CACHE_CAP_BYTES / 10 * 9;
+            let target = cap / 10 * 9;
             for (_, len, path) in files {
                 if total <= target {
                     break;
@@ -289,6 +302,12 @@ impl TileManager {
 
     pub fn cache_dir(&self) -> &PathBuf {
         self.cache.root()
+    }
+
+    /// Trims the disk cache to its cap on a background thread (after the cap was lowered).
+    pub fn trim_cache(&self) {
+        let c = self.cache.clone();
+        let _ = std::thread::Builder::new().name("cache-trim".into()).spawn(move || c.trim());
     }
 
     pub fn clear_cache(&self) {

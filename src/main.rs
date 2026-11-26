@@ -9,6 +9,7 @@ mod camera;
 mod data;
 mod flight;
 mod fonts;
+mod globe;
 mod gpu;
 mod json;
 mod mesh;
@@ -73,8 +74,17 @@ fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().collect();
     if let Some(i) = args.iter().position(|a| a == "--fetch-transit") {
         let dir = args.get(i + 1).map(String::as_str).unwrap_or("transit");
-        let only: Vec<String> = args.iter().skip(i + 2).cloned().collect();
-        transit::fetch_to_dir(std::path::Path::new(dir), &only);
+        let mut only: Vec<String> = Vec::new();
+        let mut max = 0usize;
+        let mut rest = args.iter().skip(i + 2);
+        while let Some(a) = rest.next() {
+            if a == "--max" {
+                max = rest.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+            } else {
+                only.push(a.clone());
+            }
+        }
+        transit::fetch_to_dir(std::path::Path::new(dir), &only, max);
         return Ok(());
     }
     let options = eframe::NativeOptions {
@@ -106,6 +116,9 @@ struct Fly {
 
 /// Playback speeds for the simulated flights (multiples of real time).
 const SPEEDS: [(&str, f64); 4] = [("real time", 1.0), ("60x", 60.0), ("600x", 600.0), ("3600x", 3600.0)];
+
+/// Speeds for the simulated trains (multiples of real time).
+const TRAIN_SPEEDS: [(&str, f64); 3] = [("real time", 1.0), ("5x", 5.0), ("20x", 20.0)];
 
 /// Label size choices: (name, multiplier).
 const LABEL_SIZES: [(&str, f32); 4] = [("Small", 0.85), ("Medium", 1.0), ("Large", 1.3), ("X-large", 1.65)];
@@ -163,11 +176,13 @@ struct App {
     map_dim: f32,
     flat_stations: bool,
     show_trains: bool,
+    train_speed: usize,
     /// Frame rate of animations (planes, trains) when nothing else is happening.
     anim_fps: u32,
     /// Time of the previous frame, for advancing the flights by real elapsed time.
     last_anim: f64,
     labels_shown: std::collections::HashSet<u64>,
+    coast: globe::Coast,
     /// Camera as of the previous frame, to tell when the view is moving.
     prev_cam: [f64; 7],
     pacer: Pacer,
@@ -276,9 +291,11 @@ impl App {
             map_dim: 0.5,
             flat_stations: true,
             show_trains: true,
+            train_speed: 0,
             anim_fps: 60,
             last_anim: 0.0,
             labels_shown: Default::default(),
+            coast: globe::Coast::load(),
             prev_cam: [0.0; 7],
             pacer: Pacer::new(&cc.egui_ctx),
             input_frames: 0,
@@ -381,50 +398,29 @@ impl App {
     }
 
     /// The compass rose (bottom right): points to north, click to put north back up.
+    /// The small globe in the bottom-right corner (click it to put the map north-up and flat).
     fn compass(&mut self, ctx: &egui::Context, now: f64) {
-        let heading = self.cam.heading as f32;
         let tilt = self.cam.pitch.to_degrees();
+        let blink = (now * 1.6).fract() < 0.6;
+        let (lon, lat, heading) = (self.cam.lon, self.cam.lat, self.cam.heading);
         let mut clicked = false;
-        egui::Area::new(egui::Id::new("compass")).anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-14.0, -14.0)).show(ctx, |ui| {
-            let size = 84.0;
+        let coast = &self.coast;
+        egui::Area::new(egui::Id::new("compass")).anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-18.0, -18.0)).show(ctx, |ui| {
+            let size = 118.0;
             let (rect, resp) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
-            let p = ui.painter_at(rect.expand(2.0));
-            let c = rect.center();
-            let r = size * 0.5 - 2.0;
-            p.circle(c, r, egui::Color32::from_black_alpha(150), egui::Stroke::new(1.5_f32, egui::Color32::from_white_alpha(200)));
-            // screen direction of a compass bearing
-            let dir = |bearing: f32| egui::vec2((bearing - heading).sin(), -(bearing - heading).cos());
-            for k in 0..16 {
-                let b = k as f32 * std::f32::consts::TAU / 16.0;
-                let len = if k % 4 == 0 { 0.16 } else { 0.09 };
-                let d = dir(b);
-                p.line_segment([c + d * r * (1.0 - len), c + d * r * 0.97], egui::Stroke::new(1.2_f32, egui::Color32::from_white_alpha(170)));
-            }
-            let north = dir(0.0);
-            let side = egui::vec2(-north.y, north.x);
-            let tip = c + north * r * 0.78;
-            let tail = c - north * r * 0.62;
-            p.add(egui::Shape::convex_polygon(
-                vec![tip, c + side * r * 0.2, c - north * r * 0.05, c - side * r * 0.2],
-                egui::Color32::from_rgb(230, 60, 50),
-                egui::Stroke::NONE,
-            ));
-            p.add(egui::Shape::convex_polygon(
-                vec![tail, c + side * r * 0.2, c, c - side * r * 0.2],
-                egui::Color32::from_gray(225),
-                egui::Stroke::NONE,
-            ));
-            p.text(c + north * r * 0.5 + side * 0.0, egui::Align2::CENTER_CENTER, "N", egui::FontId::proportional(12.0), egui::Color32::WHITE);
+            let p = ui.painter_at(rect.expand(8.0));
+            let r = size * 0.5 - 6.0;
+            globe::draw(&p, rect.center(), r, coast, lon, lat, heading, blink);
             if tilt > 1.0 {
                 p.text(
-                    egui::pos2(c.x, rect.max.y - 1.0),
+                    egui::pos2(rect.center().x, rect.max.y + 4.0),
                     egui::Align2::CENTER_BOTTOM,
-                    format!("{tilt:.0}°"),
+                    format!("tilt {tilt:.0}°"),
                     egui::FontId::monospace(10.0),
-                    egui::Color32::from_white_alpha(200),
+                    egui::Color32::from_white_alpha(210),
                 );
             }
-            clicked = resp.on_hover_text("Click: north up and straight down (R)").clicked();
+            clicked = resp.on_hover_text("Where you are on the planet. Click: north up and straight down (R)").clicked();
         });
         if clicked {
             self.reset_orientation(now);
@@ -527,7 +523,6 @@ impl eframe::App for App {
         self.last_anim = now;
         // The fastest the animation may redraw (the "animation rate" setting); trains never need more than 30.
         let frame = std::time::Duration::from_millis(1000 / self.anim_fps.max(1) as u64);
-        let train_frame = frame.max(std::time::Duration::from_millis(33));
         // Only planes that are switched on count: a hidden plane must not keep the screen redrawing.
         // How often they redraw is decided below, from how far they actually move on screen.
         for p in &mut self.planes {
@@ -679,13 +674,16 @@ impl eframe::App for App {
                     flat_stations: self.flat_stations,
                     trains: self.show_trains,
                     now,
+                    train_speed: TRAIN_SPEEDS[self.train_speed].1,
                     pick: if marker_click.is_none() { click } else { None },
                     selected: self.selected_line.as_ref().map(|(a, i)| (a, *i)),
                 };
                 transit::draw(&painter, rect, &self.cam, zf, &systems, &opts)
             };
             if out.animating {
-                anim_wait = anim_wait.min(train_frame.as_secs_f64());
+                // Redraw about once per pixel the fastest train crosses (slow real-time trains need very few frames).
+                let px_s = (out.motion_px_s as f64).max(1e-3);
+                anim_wait = anim_wait.min((1.0 / px_s).max(frame.as_secs_f64()).min(0.25));
             }
             let line_hit = out.hit;
             for l in out.labels {
@@ -789,6 +787,9 @@ impl eframe::App for App {
         let moving = cam_now != self.prev_cam;
         self.prev_cam = cam_now;
         ctx.tessellation_options_mut(|o| o.round_text_to_pixels = !moving);
+        if self.show_compass {
+            anim_wait = anim_wait.min(0.3); // the position dot flashes
+        }
         self.pacer.set(anim_wait);
         if self.show_compass {
             self.compass(ctx, now);
@@ -924,6 +925,8 @@ struct Cand {
     color: [u8; 3],
     halo: [u8; 3],
     at: egui::Pos2,
+    /// Text rotation in radians (street names run along their road); 0 for everything else.
+    angle: f32,
     /// Identity across frames (hash of the text), so labels shown last frame keep their place.
     key: u64,
 }
@@ -933,7 +936,7 @@ impl Cand {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         text.hash(&mut h);
-        Cand { priority, text, size, color, halo, at, key: h.finish() }
+        Cand { priority, text, size, color, halo, at, angle: 0.0, key: h.finish() }
     }
 
     fn from_station(l: StationLabel) -> Self {
@@ -977,7 +980,26 @@ fn draw_labels(
                 continue;
             }
             let text = if rule.upper { l.text.to_uppercase() } else { l.text.clone() };
-            cands.push(Cand::new(rule.priority, text, rule.size, rule.color, rule.halo, rect.min + egui::vec2(s[0] as f32, s[1] as f32)));
+            let at = rect.min + egui::vec2(s[0] as f32, s[1] as f32);
+            let mut cand = Cand::new(rule.priority, text, rule.size, rule.color, rule.halo, at);
+            if l.kind == mesh::Kind::Street {
+                // Only when the road piece is long enough for its name, and turned along the road
+                // (never upside down).
+                let world_px = 512.0 * 2f64.powf(zf);
+                if (l.span as f64 * world_px) < cand.text.chars().count() as f64 * rule.size as f64 * ls.scale as f64 * 0.55 {
+                    continue;
+                }
+                let d = 24.0 / world_px;
+                let Some(s2) = pr.project(merc_to_vec(l.mx + l.dir[0] as f64 * d, l.my + l.dir[1] as f64 * d)) else { continue };
+                let mut a = (s2[1] - s[1]).atan2(s2[0] - s[0]);
+                if a > std::f64::consts::FRAC_PI_2 {
+                    a -= std::f64::consts::PI;
+                } else if a <= -std::f64::consts::FRAC_PI_2 {
+                    a += std::f64::consts::PI;
+                }
+                cand.angle = a as f32;
+            }
+            cands.push(cand);
         }
     }
     // A label that was on screen last frame wins ties, so labels do not flicker in and out while
@@ -1002,7 +1024,11 @@ fn draw_labels(
         let col = egui::Color32::from_rgb(c.color[0], c.color[1], c.color[2]);
         let halo = egui::Color32::from_rgb(c.halo[0], c.halo[1], c.halo[2]);
         let main = painter.layout_no_wrap(c.text.clone(), font.clone(), col);
-        let r = egui::Rect::from_center_size(c.at, main.size());
+        let (sn, cs) = c.angle.sin_cos();
+        let size = main.size();
+        // box around the (possibly turned) text, for collisions
+        let ext = egui::vec2(size.x * cs.abs() + size.y * sn.abs(), size.x * sn.abs() + size.y * cs.abs());
+        let r = egui::Rect::from_center_size(c.at, ext);
         let padded = r.expand2(egui::vec2(4.0, 2.0));
         if placed.iter().any(|p| p.intersects(padded)) {
             continue;
@@ -1011,6 +1037,16 @@ fn draw_labels(
         shown.insert(c.key);
 
         let shadow = painter.layout_no_wrap(c.text, font, halo);
+        if c.angle != 0.0 {
+            // turned text: top-left corner chosen so the text is centred on its anchor
+            let half = size * 0.5;
+            let tl = c.at - egui::vec2(half.x * cs - half.y * sn, half.x * sn + half.y * cs);
+            for (dx, dy) in [(-1.3_f32, 0.0_f32), (1.3, 0.0), (0.0, -1.3), (0.0, 1.3), (-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+                painter.add(egui::epaint::TextShape::new(tl + egui::vec2(dx, dy), shadow.clone(), halo).with_angle(c.angle));
+            }
+            painter.add(egui::epaint::TextShape::new(tl, main, col).with_angle(c.angle));
+            continue;
+        }
         let o = 1.3 + bold * 1.4;
         for (dx, dy) in [(-o, 0.0), (o, 0.0), (0.0, -o), (0.0, o), (-o, -o), (o, -o), (-o, o), (o, o)] {
             painter.galley(r.min + egui::vec2(dx, dy), shadow.clone(), halo);
