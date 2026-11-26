@@ -310,9 +310,9 @@ pub fn fetch_to_dir(dir: &Path, only: &[String], max: usize) {
             failed += 1;
             say(format!("{}: gave up", cfg.id));
         }
-        std::thread::sleep(Duration::from_secs(8)); // be gentle between systems
+        std::thread::sleep(Duration::from_secs(20)); // be gentle between systems
     }
-    say(format!("finished, {failed} system(s) missing, {left_over} left for the next batch"));
+    say(format!("finished, {failed} system(s) missing, {left_over} left for the next night"));
     let _ = std::fs::write(dir.join("remaining.txt"), (failed + left_over).to_string());
 }
 

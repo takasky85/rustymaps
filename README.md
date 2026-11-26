@@ -53,7 +53,7 @@ The program looks for it in `%RUSTYMAPS_DATA%` (environment variable), then a `d
 `%LOCALAPPDATA%\rustymaps\data` (macOS `~/Library/Application Support/rustymaps/data`, Linux `~/.local/share/rustymaps/data`).
 Get the folder once from the **data** workflow (Actions, *data*, *Run workflow*; it also downloads any transit maps that are
 missing and commits them to `assets/transit`, so each system is only ever downloaded once) and keep it; new builds of the
-program do not need it again. Every city with a saved map shows up by itself when you zoom in on it (a metro symbol marks it from afar); cities without a saved file are simply not shown. About 100 systems are listed in `src/transit_data.rs` (metros, light rail and commuter/regional rail, including JR East around Tokyo); the data workflow downloads 22 missing ones per run and starts the next batch by itself until all are saved.
+program do not need it again. Every city with a saved map shows up by itself when you zoom in on it (a metro symbol marks it from afar); cities without a saved file are simply not shown. About 100 systems are listed in `src/transit_data.rs` (metros, light rail and commuter/regional rail, including JR East around Tokyo); the data workflow runs by itself every night at 03:23 UTC (a quiet hour for the public map servers), downloads up to 15 missing ones per run and commits them, so all are saved within about a week; start it by hand for anything sooner.
 
 ## Transit maps
 
