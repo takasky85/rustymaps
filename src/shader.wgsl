@@ -178,8 +178,6 @@ fn vs_line(
     }
     let nrm = vec2<f32>(-dir.y, dir.x);
 
-    let half_w = w_px * 0.5 * keep;
-    let pad = half_w + 0.5;            // room for the antialiased edge
     let at_end = t > 0.5;
     let base = select(pa, pb, at_end);
     let clip = select(ca, cb, at_end);
@@ -193,6 +191,8 @@ fn vs_line(
         o.pos = vec4<f32>(0.0, 0.0, 2.0, 1.0);
         return o;
     }
+    let half_w = w_px * 0.5 * keep;
+    let pad = half_w + 0.5;            // room for the antialiased edge
 
     // Square caps (extend by `pad` along the line) hide gaps at joints.
     let px = base + dir * (t * 2.0 - 1.0) * pad + nrm * side * pad;
