@@ -109,8 +109,9 @@ impl Timeline {
                 for &(s0, s1) in &ends {
                     let a = &active[s0..s1];
                     for i in 0..a.len() {
-                        let lo = a.partition_point(|&x| x < a[i] - SPEED_WINDOW_S);
-                        let hi = a.partition_point(|&x| x <= a[i] + SPEED_WINDOW_S).saturating_sub(1);
+                        // at least the neighbour on each side, however far apart the fixes are
+                        let lo = a.partition_point(|&x| x < a[i] - SPEED_WINDOW_S).min(i.saturating_sub(1));
+                        let hi = (a.partition_point(|&x| x <= a[i] + SPEED_WINDOW_S).saturating_sub(1)).max((i + 1).min(a.len() - 1));
                         let dt = a[hi] - a[lo];
                         speed[s0 + i] = if dt > 0.5 { (dist[s0 + hi] - dist[s0 + lo]) / dt } else { 0.0 };
                     }
@@ -260,6 +261,18 @@ mod tests {
         assert_eq!(distance_text(350.0).1, "0.22 mi");
         assert_eq!(distance_text(1240.0), ("1.24 km".to_string(), "0.77 mi".to_string()));
         assert_eq!(speed_text(1.5), ("5.4".to_string(), "3.4 mph".to_string()));
+    }
+
+    #[test]
+    fn fixes_further_apart_than_the_window_still_give_speeds() {
+        // a point every 10 s, 12 m apart: 1.2 m/s
+        let segs = vec![(0..6).map(|i| at(i as f64 * 12.0, 0.0)).collect::<Vec<V3>>()];
+        let times = vec![(0..6).map(|i| 100.0 + i as f64 * 10.0).collect::<Vec<f64>>()];
+        let t = Timeline::new(&segs, &times, None);
+        assert_eq!(t.timing, Timing::Exact);
+        for u in [0.0, 12.0, 25.0, 50.0] {
+            assert!((t.at(u).speed_ms - 1.2).abs() < 0.05, "{u}: {}", t.at(u).speed_ms);
+        }
     }
 
     #[test]
