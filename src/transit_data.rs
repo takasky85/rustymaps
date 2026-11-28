@@ -417,6 +417,15 @@ pub const SYSTEMS: &[SystemConfig] = &[
     sys("santiago", "Santiago Metro", [-33.70, -70.85, -33.30, -70.45], "subway", ANY, &[], (-33.4372, -70.6506)),
     sys("buenosaires", "Buenos Aires Subte", [-34.75, -58.60, -34.50, -58.30], "subway|light_rail", ANY, &[], (-34.6037, -58.3816)),
     sys("rio", "Rio de Janeiro Metro", [-23.10, -43.45, -22.80, -43.10], "subway|light_rail", ANY, &[], (-22.9068, -43.1729)),
+    sys(
+        "shinkansen",
+        "Japan Shinkansen",
+        [30.90, 129.50, 45.60, 145.90],
+        "train",
+        &[r#"["name"~"Shinkansen|新幹線"]"#, r#"["network"~"Shinkansen|新幹線"]"#],
+        &[],
+        (35.6812, 139.7671),
+    ),
     // ---- More metros worldwide (the nightly job saves a few at a time) ----
     sys("suzhou", "Suzhou Rail Transit", [31.0, 120.26, 31.6, 120.98], "subway|light_rail", ANY, &[], (31.3, 120.62)),
     sys("qingdao", "Qingdao Metro", [35.77, 120.02, 36.37, 120.74], "subway|light_rail", ANY, &[], (36.07, 120.38)),
