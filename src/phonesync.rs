@@ -196,6 +196,9 @@ fn save_cfg(path: &Path, s: &Shared) {
 }
 
 fn note(s: &mut Shared, line: String) {
+    if s.log.last() == Some(&line) {
+        return;
+    }
     s.log.push(line);
     if s.log.len() > 12 {
         s.log.remove(0);
@@ -403,6 +406,17 @@ fn handle(ctx: &Ctx, mut stream: TcpStream) {
             Ok(_) => (200, format!("ok {}", ctx.shared.lock().unwrap().desk_name)),
             Err(e) => e,
         },
+        // lets the phone check an address directly when the broadcast search is blocked
+        ("GET", "/hello") => {
+            let mut s = ctx.shared.lock().unwrap();
+            if let Ok(a) = stream.peer_addr() {
+                note(&mut s, format!("Phone at {} checked in", a.ip()));
+            }
+            let r = (200, format!("RMAPS1 HERE {} {} {}", s.tcp_port, s.desk_id, s.desk_name));
+            drop(s);
+            (ctx.notify)();
+            r
+        }
         ("PUT", p) if p.starts_with("/track/") => put_track(ctx, &req, &p["/track/".len()..]),
         _ => (404, "not found".into()),
     };
@@ -473,16 +487,18 @@ impl PhoneSync {
                 let port = u.local_addr().map(|a| a.port()).unwrap_or(0);
                 shared.lock().unwrap().udp_port = port;
                 let _ = u.set_read_timeout(Some(Duration::from_millis(300)));
-                let (sh, stop2) = (shared.clone(), stop.clone());
+                let (sh, stop2, nf) = (shared.clone(), stop.clone(), notify.clone());
                 let _ = std::thread::Builder::new().name("sync-udp".into()).spawn(move || {
                     let mut buf = [0u8; 256];
                     while !stop2.load(Ordering::Relaxed) {
                         if let Ok((n, from)) = u.recv_from(&mut buf) {
                             if buf[..n].starts_with(b"RMAPS1 WHO") {
-                                let s = sh.lock().unwrap();
+                                let mut s = sh.lock().unwrap();
                                 let msg = format!("RMAPS1 HERE {} {} {}", s.tcp_port, s.desk_id, s.desk_name);
+                                note(&mut s, format!("Search from {} answered", from.ip()));
                                 drop(s);
                                 let _ = u.send_to(msg.as_bytes(), from);
+                                nf();
                             }
                         }
                     }
@@ -645,6 +661,10 @@ mod tests {
         let sig = hex(&hmac(&key, format!("put|y.kml|300|{}", hex(&sha256(KML.as_bytes()))).as_bytes()));
         let hdrs = [("X-Phone", id.to_string()), ("X-Time", "300".to_string()), ("X-Sig", sig)];
         assert_eq!(request(addr, "PUT", "/track/y.kml", &hdrs, newer.as_bytes()).0, 401);
+
+        // the phone can check an address directly, without the broadcast search
+        let (c, hello) = request(addr, "GET", "/hello", &[], b"");
+        assert!(c == 200 && hello.starts_with(&format!("RMAPS1 HERE {} ", snap.tcp_port)), "{hello}");
 
         // ping needs the key too
         let t = 5u64;
