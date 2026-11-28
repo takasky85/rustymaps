@@ -21,6 +21,7 @@ mod phonesync;
 mod plane;
 mod search;
 mod settings;
+mod sha256;
 mod style;
 mod tile_id;
 mod tiles;

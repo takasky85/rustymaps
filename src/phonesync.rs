@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::net::{IpAddr, TcpListener, TcpStream, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -555,6 +555,7 @@ impl Drop for PhoneSync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::SocketAddr;
 
     fn request(addr: SocketAddr, method: &str, path: &str, headers: &[(&str, String)], body: &[u8]) -> (u16, String) {
         let mut s = TcpStream::connect(addr).unwrap();
@@ -707,6 +708,5 @@ mod tests {
         assert!(!valid_file_name("../a.kml") && !valid_file_name("a/b.kml") && !valid_file_name("a.txt") && !valid_file_name(".kml") && !valid_file_name("a..kml"));
         assert_eq!(clean_name("Pixel|8\n"), "Pixel8");
         assert_eq!(slug("John's Pixel 8!"), "JohnsPixel8");
-        let _ = (Ipv4Addr::LOCALHOST,);
     }
 }
