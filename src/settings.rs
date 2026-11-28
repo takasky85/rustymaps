@@ -80,6 +80,8 @@ impl App {
         s.set("backend", self.backend);
         s.set("cache_mb", crate::tiles::cache_cap_mb());
         s.set("ui_size", self.ui_size);
+        s.set("bilingual", self.bilingual);
+        s.set("favorites", self.favorites.join(","));
         for p in &self.planes {
             s.set(&format!("plane_{}", p.def.model), p.show);
         }
@@ -107,6 +109,10 @@ impl App {
         take!(self.map_dim, "dim");
         take!(self.flat_stations, "flat_stations");
         take!(self.show_trains, "trains");
+        take!(self.bilingual, "bilingual");
+        if let Some(v) = s.get::<String>("favorites") {
+            self.favorites = v.split(',').map(str::trim).filter(|x| !x.is_empty()).map(String::from).collect();
+        }
         take!(self.route_color[0], "route_r");
         take!(self.route_color[1], "route_g");
         take!(self.route_color[2], "route_b");

@@ -598,6 +598,8 @@ pub const SYSTEMS: &[SystemConfig] = &[
 
 pub struct TLine {
     pub name: String,
+    /// Name in the local script when it differs from `name` ("" if none).
+    pub local: String,
     /// Short letter/number for the end-of-line roundel.
     pub badge: String,
     pub color: [u8; 3],
@@ -726,10 +728,30 @@ impl Track {
 }
 
 pub struct Station {
+    /// English / Latin name ("" if the station has none).
     pub name: String,
+    /// Name in the local script (kanji, hangul, ...) when it differs from `name`.
+    pub local: String,
+    /// Reading in kana (Japanese stations that have one).
+    pub kana: String,
+    /// Station code such as "JY03", when mapped.
+    pub code: String,
     pub pos: V3,
     /// Indices into `SystemData::lines`; two or more means an interchange.
     pub lines: Vec<usize>,
+    /// Stations next to this one along a line: (line index, station index).
+    pub nbrs: Vec<(u16, u32)>,
+}
+
+impl Station {
+    /// Name to show when only one is wanted: English if there is one, else the local one.
+    pub fn display(&self) -> &str {
+        if self.name.is_empty() {
+            &self.local
+        } else {
+            &self.name
+        }
+    }
 }
 
 #[derive(Default)]
@@ -815,7 +837,14 @@ impl SystemData {
 // this keeps only what is drawn, at about 1 cm precision.
 // ---------------------------------------------------------------------------
 
-const TMAP_MAGIC: &[u8; 4] = b"TMP1";
+/// Version 1 files hold English names only; version 2 adds local names, kana, codes and neighbours.
+const TMAP_MAGIC: &[u8; 4] = b"TMP2";
+const TMAP_MAGIC_V1: &[u8; 4] = b"TMP1";
+
+/// True when a saved file is in an older format and worth fetching again.
+pub fn is_outdated(bytes_head: &[u8]) -> bool {
+    bytes_head.len() >= 4 && &bytes_head[..4] == TMAP_MAGIC_V1
+}
 
 fn put_u16(o: &mut Vec<u8>, v: usize) {
     o.extend_from_slice(&(v.min(u16::MAX as usize) as u16).to_le_bytes());
@@ -845,6 +874,7 @@ pub fn encode(d: &SystemData) -> Vec<u8> {
         o.extend_from_slice(&l.color);
         put_str(&mut o, &l.badge);
         put_str(&mut o, &l.name);
+        put_str(&mut o, &l.local);
         put_u32(&mut o, l.paths.len());
         for p in &l.paths {
             put_u32(&mut o, p.len());
@@ -856,10 +886,18 @@ pub fn encode(d: &SystemData) -> Vec<u8> {
     put_u32(&mut o, d.stations.len());
     for s in &d.stations {
         put_str(&mut o, &s.name);
+        put_str(&mut o, &s.local);
+        put_str(&mut o, &s.kana);
+        put_str(&mut o, &s.code);
         put_ll(&mut o, s.pos);
         o.push(s.lines.len().min(255) as u8);
         for &li in s.lines.iter().take(255) {
             put_u16(&mut o, li);
+        }
+        o.push(s.nbrs.len().min(255) as u8);
+        for &(li, si) in s.nbrs.iter().take(255) {
+            put_u16(&mut o, li as usize);
+            put_u32(&mut o, si as usize);
         }
     }
     o
@@ -904,9 +942,10 @@ impl<'a> Reader<'a> {
 }
 
 pub fn decode(bytes: &[u8]) -> Result<SystemData, String> {
-    if bytes.len() < 4 || &bytes[..4] != TMAP_MAGIC {
+    if bytes.len() < 4 || (&bytes[..4] != TMAP_MAGIC && &bytes[..4] != TMAP_MAGIC_V1) {
         return Err("not a RustyMaps transit file".into());
     }
+    let v2 = &bytes[..4] == TMAP_MAGIC;
     let mut r = Reader { b: bytes, at: 4 };
     let mut d = SystemData::default();
     for _ in 0..r.u16()? {
@@ -914,6 +953,7 @@ pub fn decode(bytes: &[u8]) -> Result<SystemData, String> {
         let color = [c[0], c[1], c[2]];
         let badge = r.string()?;
         let name = r.string()?;
+        let local = if v2 { r.string()? } else { String::new() };
         let mut paths = Vec::new();
         for _ in 0..r.u32()? {
             let n = r.u32()?;
@@ -926,17 +966,25 @@ pub fn decode(bytes: &[u8]) -> Result<SystemData, String> {
             }
             paths.push(p);
         }
-        d.lines.push(TLine { name, badge, color, paths, track: Track::default() });
+        d.lines.push(TLine { name, local, badge, color, paths, track: Track::default() });
     }
     for _ in 0..r.u32()? {
         let name = r.string()?;
+        let (local, kana, code) = if v2 { (r.string()?, r.string()?, r.string()?) } else { Default::default() };
         let pos = r.ll()?;
         let n = r.u8()? as usize;
         let mut lines = Vec::with_capacity(n);
         for _ in 0..n {
             lines.push(r.u16()?);
         }
-        d.stations.push(Station { name, pos, lines });
+        let mut nbrs = Vec::new();
+        if v2 {
+            for _ in 0..r.u8()? {
+                let li = r.u16()? as u16;
+                nbrs.push((li, r.u32()? as u32));
+            }
+        }
+        d.stations.push(Station { name, local, kana, code, pos, lines, nbrs });
     }
     d.finish();
     Ok(d)
@@ -1016,9 +1064,45 @@ fn is_latin(s: &str) -> bool {
 
 /// English/Latin display name from an OSM `tags` object ("" if there is none).
 fn latin_name(tags: &Json) -> String {
-    for k in ["name:en", "name:latin", "int_name", "name"] {
+    for k in ["name:en", "name:latin", "int_name", "name:ja_rm", "name:ja-Latn", "name"] {
         if let Some(n) = tags.str_at(k) {
             if is_latin(n) && !n.is_empty() {
+                return n.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+/// Name in the local script (kanji, hangul, ...), "" if the name is Latin anyway.
+fn native_name(tags: &Json) -> String {
+    for k in ["name", "name:ja", "name:zh", "name:ko", "name:ru", "name:uk", "name:el", "name:ar", "name:th", "name:hi"] {
+        if let Some(n) = tags.str_at(k) {
+            if !n.is_empty() && !is_latin(n) {
+                return n.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+/// Kana reading of a Japanese name, "" if none is mapped.
+fn kana_name(tags: &Json) -> String {
+    for k in ["name:ja-Hira", "name:ja_hira", "name:ja_kana", "name:ja-Kana"] {
+        if let Some(n) = tags.str_at(k) {
+            if !n.is_empty() {
+                return n.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+/// Station code ("JY03") from a stop node's tags.
+fn station_code(tags: &Json) -> String {
+    for k in ["railway:ref", "ref", "station:code"] {
+        if let Some(n) = tags.str_at(k) {
+            if !n.is_empty() && n.len() <= 8 {
                 return n.to_string();
             }
         }
@@ -1094,20 +1178,31 @@ pub fn parse(cfg: &SystemConfig, text: &str) -> Result<SystemData, String> {
     let elements = doc.get("elements").and_then(Json::as_arr).ok_or("no \"elements\" in response")?;
 
     // Stop nodes with their tags.
-    let mut nodes: HashMap<i64, (LonLat, String)> = HashMap::new();
+    #[derive(Clone, Default)]
+    struct Names {
+        name: String,
+        local: String,
+        kana: String,
+        code: String,
+    }
+    let mut nodes: HashMap<i64, (LonLat, Names)> = HashMap::new();
     for e in elements {
         if e.str_at("type") == Some("node") {
             if let (Some(id), Some(lat), Some(lon)) =
                 (e.get("id").and_then(Json::as_f64), e.get("lat").and_then(Json::as_f64), e.get("lon").and_then(Json::as_f64))
             {
-                let name = e.get("tags").map(latin_name).unwrap_or_default();
-                nodes.insert(id as i64, ((lon, lat), name));
+                let names = e
+                    .get("tags")
+                    .map(|t| Names { name: latin_name(t), local: native_name(t), kana: kana_name(t), code: station_code(t) })
+                    .unwrap_or_default();
+                nodes.insert(id as i64, ((lon, lat), names));
             }
         }
     }
 
     struct Acc {
         name: String,
+        local: String,
         badge: String,
         color: [u8; 3],
         ways: Vec<Vec<LonLat>>,
@@ -1116,6 +1211,7 @@ pub fn parse(cfg: &SystemConfig, text: &str) -> Result<SystemData, String> {
     let mut keys: HashMap<String, usize> = HashMap::new();
     let mut accs: Vec<Acc> = Vec::new();
     let mut stops: Vec<(i64, usize)> = Vec::new(); // (node id, line index)
+    let mut seqs: Vec<(usize, Vec<i64>)> = Vec::new(); // stop nodes of each route, in order
     let mut stop_pos: HashMap<i64, LonLat> = HashMap::new();
 
     for e in elements {
@@ -1154,11 +1250,12 @@ pub fn parse(cfg: &SystemConfig, text: &str) -> Result<SystemData, String> {
             if name.is_empty() {
                 name = rf.to_string();
             }
-            accs.push(Acc { name, badge, color, ways: Vec::new(), way_ids: HashSet::new() });
+            accs.push(Acc { name, local: native_name(tags), badge, color, ways: Vec::new(), way_ids: HashSet::new() });
             accs.len() - 1
         });
 
         let Some(members) = e.get("members").and_then(Json::as_arr) else { continue };
+        let mut seq: Vec<i64> = Vec::new();
         for m in members {
             let role = m.str_at("role").unwrap_or("");
             match m.str_at("type") {
@@ -1184,6 +1281,7 @@ pub fn parse(cfg: &SystemConfig, text: &str) -> Result<SystemData, String> {
                     if let Some(id) = m.get("ref").and_then(Json::as_f64) {
                         let id = id as i64;
                         stops.push((id, idx));
+                        seq.push(id);
                         if let (Some(lat), Some(lon)) = (m.get("lat").and_then(Json::as_f64), m.get("lon").and_then(Json::as_f64)) {
                             stop_pos.insert(id, (lon, lat));
                         }
@@ -1192,6 +1290,9 @@ pub fn parse(cfg: &SystemConfig, text: &str) -> Result<SystemData, String> {
                 _ => {}
             }
         }
+        if seq.len() >= 2 {
+            seqs.push((idx, seq));
+        }
     }
 
     let to_v3 = |p: LonLat| lonlat_to_vec(p.0.to_radians(), p.1.to_radians());
@@ -1199,26 +1300,58 @@ pub fn parse(cfg: &SystemConfig, text: &str) -> Result<SystemData, String> {
     for a in accs {
         let paths: Vec<Vec<V3>> =
             chain(a.ways).into_iter().map(|w| w.into_iter().map(to_v3).collect()).collect();
-        data.lines.push(TLine { name: a.name, badge: a.badge, color: a.color, paths, track: Track::default() });
+        data.lines.push(TLine { name: a.name, local: a.local, badge: a.badge, color: a.color, paths, track: Track::default() });
     }
 
     // Stations: merge platform pairs / duplicate stops of the same name that sit close together.
+    let mut station_of: HashMap<i64, usize> = HashMap::new();
     for (id, line) in stops {
         let Some(p) = nodes.get(&id).map(|n| n.0).or_else(|| stop_pos.get(&id).copied()) else { continue };
-        let name = nodes.get(&id).map(|n| n.1.clone()).unwrap_or_default();
+        let nm = nodes.get(&id).map(|n| n.1.clone()).unwrap_or_default();
         let pos = to_v3(p);
-        let radius = if name.is_empty() { 40.0 } else { 300.0 };
-        let hit = data
-            .stations
-            .iter_mut()
-            .find(|s| s.name == name && chord_m(s.pos, pos) < radius);
+        // A stop with no name at all merges only with one right next to it.
+        let nameless = nm.name.is_empty() && nm.local.is_empty();
+        let radius = if nameless { 40.0 } else { 300.0 };
+        let hit = data.stations.iter().position(|s| {
+            s.name == nm.name && (s.local == nm.local || s.local.is_empty() || nm.local.is_empty()) && chord_m(s.pos, pos) < radius
+        });
         match hit {
-            Some(s) => {
+            Some(i) => {
+                let s = &mut data.stations[i];
                 if !s.lines.contains(&line) {
                     s.lines.push(line);
                 }
+                if s.local.is_empty() {
+                    s.local = nm.local;
+                }
+                if s.kana.is_empty() {
+                    s.kana = nm.kana;
+                }
+                if s.code.is_empty() {
+                    s.code = nm.code;
+                }
+                station_of.insert(id, i);
             }
-            None => data.stations.push(Station { name, pos, lines: vec![line] }),
+            None => {
+                data.stations.push(Station { name: nm.name, local: nm.local, kana: nm.kana, code: nm.code, pos, lines: vec![line], nbrs: Vec::new() });
+                station_of.insert(id, data.stations.len() - 1);
+            }
+        }
+    }
+    // Neighbours: stations that follow each other in a route.
+    for (line, seq) in seqs {
+        let mut prev: Option<usize> = None;
+        for id in seq {
+            let Some(&si) = station_of.get(&id) else { continue };
+            if let Some(pi) = prev.filter(|&pi| pi != si) {
+                for (a, b) in [(pi, si), (si, pi)] {
+                    let key = (line as u16, b as u32);
+                    if !data.stations[a].nbrs.contains(&key) {
+                        data.stations[a].nbrs.push(key);
+                    }
+                }
+            }
+            prev = Some(si);
         }
     }
     data.finish();
@@ -1352,6 +1485,70 @@ mod tests {
         assert_eq!(d.stations.iter().filter(|s| s.name == "Shibuya").count(), 1);
         // Asakusa has only a Japanese name: kept as an unnamed dot
         assert!(d.stations.iter().any(|s| s.name.is_empty() && s.lines == vec![0]));
+    }
+
+    const JAPAN: &str = r##"{"elements":[
+      {"type":"relation","id":1,"tags":{"route":"train","ref":"JY","name":"山手線","name:en":"Yamanote Line","colour":"#9acd32"},
+       "members":[
+         {"type":"way","ref":100,"role":"","geometry":[{"lat":35.0,"lon":139.0},{"lat":35.0,"lon":139.3}]},
+         {"type":"node","ref":1,"role":"stop","lat":35.0,"lon":139.0},
+         {"type":"node","ref":2,"role":"stop","lat":35.0,"lon":139.1},
+         {"type":"node","ref":3,"role":"stop","lat":35.0,"lon":139.2}]},
+      {"type":"node","id":1,"lat":35.0,"lon":139.0,"tags":{"name":"御徒町","name:en":"Okachimachi"}},
+      {"type":"node","id":2,"lat":35.0,"lon":139.1,"tags":{"name":"秋葉原","name:en":"Akihabara","name:ja-Hira":"あきはばら","railway:ref":"JY03"}},
+      {"type":"node","id":3,"lat":35.0,"lon":139.2,"tags":{"name":"神田","name:en":"Kanda"}}
+    ]}"##;
+
+    #[test]
+    fn japanese_stations_keep_kanji_kana_code_and_neighbours() {
+        let d = parse(&SYSTEMS[2], JAPAN).unwrap();
+        assert_eq!(d.lines[0].local, "山手線");
+        let i = d.stations.iter().position(|s| s.name == "Akihabara").unwrap();
+        let a = &d.stations[i];
+        assert_eq!((a.local.as_str(), a.kana.as_str(), a.code.as_str()), ("秋葉原", "あきはばら", "JY03"));
+        let names: Vec<&str> = a.nbrs.iter().map(|&(_, si)| d.stations[si as usize].name.as_str()).collect();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"Okachimachi") && names.contains(&"Kanda"), "{names:?}");
+        let end = d.stations.iter().find(|s| s.name == "Okachimachi").unwrap();
+        assert_eq!(end.nbrs.len(), 1);
+        // survives the file format
+        let back = decode(&encode(&d)).unwrap();
+        let b = back.stations.iter().find(|s| s.name == "Akihabara").unwrap();
+        assert_eq!((b.local.as_str(), b.kana.as_str(), b.code.as_str(), b.nbrs.len()), ("秋葉原", "あきはばら", "JY03", 2));
+        assert_eq!(back.lines[0].local, "山手線");
+    }
+
+    #[test]
+    fn old_files_still_load_and_are_flagged_for_a_refetch() {
+        let d = parse(&SYSTEMS[2], SAMPLE).unwrap();
+        let mut v1 = Vec::new();
+        v1.extend_from_slice(b"TMP1");
+        v1.extend_from_slice(&(d.lines.len() as u16).to_le_bytes());
+        for l in &d.lines {
+            v1.extend_from_slice(&l.color);
+            put_str(&mut v1, &l.badge);
+            put_str(&mut v1, &l.name);
+            put_u32(&mut v1, l.paths.len());
+            for p in &l.paths {
+                put_u32(&mut v1, p.len());
+                for &v in p {
+                    put_ll(&mut v1, v);
+                }
+            }
+        }
+        put_u32(&mut v1, d.stations.len());
+        for s in &d.stations {
+            put_str(&mut v1, &s.name);
+            put_ll(&mut v1, s.pos);
+            v1.push(s.lines.len() as u8);
+            for &li in &s.lines {
+                put_u16(&mut v1, li);
+            }
+        }
+        assert!(is_outdated(&v1) && !is_outdated(&encode(&d)));
+        let back = decode(&v1).unwrap();
+        assert_eq!(back.stations.len(), d.stations.len());
+        assert!(back.stations.iter().all(|s| s.local.is_empty() && s.nbrs.is_empty()));
     }
 
     #[test]

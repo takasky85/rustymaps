@@ -9,7 +9,7 @@ use crate::camera::{vec_to_lonlat, MAX_PITCH};
 use crate::search::Hit;
 use crate::style::Palette;
 use crate::transit_data::SYSTEMS;
-use crate::{App, CITY_ZOOM, LABEL_SIZES, SF_LAT, SF_LON, SPEEDS};
+use crate::{App, CITY_ZOOM, LABEL_SIZES, SPEEDS};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
@@ -150,23 +150,69 @@ impl App {
                 to.shift = [0.0, 0.0];
                 self.fly_to(to, now, 2.5);
             }
-            if ui.button("San Francisco").clicked() {
-                self.goto_city(SF_LON, SF_LAT, now);
-            }
+            ui.add(egui::TextEdit::singleline(&mut self.places_filter).hint_text("Search places…").desired_width(ui.available_width()));
         });
         ui.separator();
-        ui.label(RichText::new("Cities with a subway map").strong());
-        let (cw, ch) = (self.cell_w(3), 28.0 * self.k());
-        egui::Grid::new("places").num_columns(3).spacing([8.0 * self.k(), 6.0 * self.k()]).show(ui, |ui| {
-            for (n, sys) in SYSTEMS.iter().enumerate() {
-                if ui.add_sized([cw, ch], egui::Button::new(sys.title).truncate()).on_hover_text(sys.title).clicked() {
-                    self.goto_city(sys.home.1, sys.home.0, now);
+
+        let q = self.places_filter.trim().to_lowercase();
+        let matches = |i: usize| q.is_empty() || SYSTEMS[i].title.to_lowercase().contains(&q) || SYSTEMS[i].id.contains(&q);
+        let mut sorted: Vec<usize> = (0..SYSTEMS.len()).collect();
+        sorted.sort_by_key(|&i| SYSTEMS[i].title.to_lowercase());
+        let favs: Vec<usize> = sorted.iter().copied().filter(|&i| self.favorites.iter().any(|f| f == SYSTEMS[i].id) && matches(i)).collect();
+
+        let mut goto: Option<usize> = None;
+        let mut star: Option<usize> = None;
+        let (row_h, k) = (26.0 * self.k(), self.k());
+        let mut row = |ui: &mut egui::Ui, i: usize, is_fav: bool| {
+            ui.horizontal(|ui| {
+                let mark = if is_fav { "★" } else { "☆" };
+                let tip = if is_fav { "Remove from favorites" } else { "Add to favorites" };
+                let colour = if is_fav { Color32::from_rgb(255, 200, 40) } else { Color32::GRAY };
+                if ui.add_sized([row_h, row_h], egui::Button::new(RichText::new(mark).color(colour).size(15.0 * k)).frame(false)).on_hover_text(tip).clicked() {
+                    star = Some(i);
                 }
-                if n % 3 == 2 {
-                    ui.end_row();
+                if ui.add_sized([ui.available_width(), row_h], egui::Button::new(SYSTEMS[i].title).truncate()).on_hover_text(SYSTEMS[i].title).clicked() {
+                    goto = Some(i);
+                }
+            });
+        };
+        if !favs.is_empty() {
+            ui.label(RichText::new("Favorites").strong());
+            for &i in &favs {
+                row(ui, i, true);
+            }
+            ui.separator();
+        }
+        let all: Vec<usize> = sorted.iter().copied().filter(|&i| matches(i)).collect();
+        ui.label(RichText::new(if q.is_empty() { format!("All places ({})", all.len()) } else { format!("{} found", all.len()) }).strong());
+        let mut letter = ' ';
+        for &i in &all {
+            if q.is_empty() {
+                let first = SYSTEMS[i].title.chars().next().map_or(' ', |c| c.to_ascii_uppercase());
+                if first != letter {
+                    letter = first;
+                    ui.add_space(4.0 * k);
+                    ui.label(RichText::new(letter.to_string()).small().weak());
                 }
             }
-        });
+            let is_fav = self.favorites.iter().any(|f| f == SYSTEMS[i].id);
+            row(ui, i, is_fav);
+        }
+        if all.is_empty() {
+            ui.label("Nothing matches.");
+        }
+        if let Some(i) = star {
+            let id = SYSTEMS[i].id.to_string();
+            match self.favorites.iter().position(|f| *f == id) {
+                Some(at) => {
+                    self.favorites.remove(at);
+                }
+                None => self.favorites.push(id),
+            }
+        }
+        if let Some(i) = goto {
+            self.goto_city(SYSTEMS[i].home.1, SYSTEMS[i].home.0, now);
+        }
     }
 
     // ---------------------------------------------------------------- Map
@@ -218,7 +264,14 @@ impl App {
             ui.small(if self.fonts.has_real_bold() { "Fonts installed on this computer; this one has a real bold face." } else { "Fonts installed on this computer; bold is faked for this one (pick another for real bold)." });
         });
         ui.separator();
+        ui.horizontal(|ui| {
+            let full = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+            if ui.button(if full { "Leave full screen (F11)" } else { "Full screen (F11)" }).clicked() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!full));
+            }
+        });
         ui.checkbox(&mut self.show_compass, "Mini globe (bottom right)");
+        ui.checkbox(&mut self.bilingual, "Station names: local script with English underneath");
         ui.checkbox(&mut self.transit_focus, "Subway focus: dim the map, hide its labels");
         if self.transit_focus {
             ui.add(egui::Slider::new(&mut self.map_dim, 0.0..=0.85).text("Dim"));

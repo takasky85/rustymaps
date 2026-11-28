@@ -41,6 +41,8 @@ pub struct TransitManager {
     ctx: egui::Context,
     dir: PathBuf,
     slots: Vec<Slot>,
+    /// Slot indices from the bottom of the drawing order to the top.
+    order: Vec<usize>,
 }
 
 fn tmap_path(dir: &Path, id: &str) -> PathBuf {
@@ -59,7 +61,8 @@ impl TransitManager {
                 offline: tmap_path(&data_dir, c.id).is_file(),
             })
             .collect();
-        TransitManager { ctx: ctx.clone(), dir: data_dir, slots }
+        let order = (0..slots.len()).collect();
+        TransitManager { ctx: ctx.clone(), dir: data_dir, slots, order }
     }
 
     pub fn enabled(&self, i: usize) -> bool {
@@ -138,20 +141,52 @@ impl TransitManager {
                 if out.len() >= limit {
                     return out;
                 }
-                if !st.name.is_empty()
-                    && st.name.to_lowercase().contains(&q)
-                    && !out.iter().any(|o| o.0 == st.name && o.1 == cfg.title)
-                {
-                    out.push((st.name.clone(), cfg.title, st.pos));
+                let hit = (!st.name.is_empty() && st.name.to_lowercase().contains(&q)) || (!st.local.is_empty() && st.local.contains(query.trim()));
+                let shown = if st.local.is_empty() || st.name.is_empty() { st.display().to_string() } else { format!("{} ({})", st.name, st.local) };
+                if hit && !out.iter().any(|o| o.0 == shown && o.1 == cfg.title) {
+                    out.push((shown, cfg.title, st.pos));
                 }
             }
         }
         out
     }
 
-    /// Data of all enabled, loaded systems.
+    /// Slots of all enabled, loaded systems, in drawing order (the last is drawn on top).
+    pub fn visible_slots(&self) -> Vec<usize> {
+        self.order.iter().copied().filter(|&i| self.slots[i].enabled && self.slots[i].data.is_some()).collect()
+    }
+
+    /// Data of all enabled, loaded systems, in the same order as `visible_slots`.
     pub fn visible(&self) -> Vec<Arc<SystemData>> {
-        self.slots.iter().filter(|s| s.enabled).filter_map(|s| s.data.clone()).collect()
+        self.visible_slots().into_iter().filter_map(|i| self.slots[i].data.clone()).collect()
+    }
+
+    /// Loaded systems (shown or hidden) whose area is around the camera, top of the drawing order first.
+    pub fn nearby(&self, cam: &Camera, aspect: f64) -> Vec<usize> {
+        self.order
+            .iter()
+            .rev()
+            .copied()
+            .filter(|&i| self.slots[i].data.as_ref().map_or(false, |d| may_be_visible(cam, d, aspect)))
+            .collect()
+    }
+
+    /// Moves `slot` one place up (towards the top of the drawing order) or down, past the next
+    /// system in `among` (the list the user is looking at).
+    pub fn shift_priority(&mut self, slot: usize, up: bool, among: &[usize]) {
+        let Some(at) = self.order.iter().position(|&i| i == slot) else { return };
+        let other = if up {
+            self.order[at + 1..].iter().position(|i| among.contains(i)).map(|k| at + 1 + k)
+        } else {
+            self.order[..at].iter().rposition(|i| among.contains(i))
+        };
+        if let Some(o) = other {
+            self.order.swap(at, o);
+        }
+    }
+
+    pub fn title(&self, slot: usize) -> &'static str {
+        SYSTEMS[slot].title
     }
 }
 
@@ -255,12 +290,25 @@ pub fn fetch_to_dir(dir: &Path, only: &[String], max: usize) {
     // queue, so a difficult one cannot use up every night's batch.
     let mut queue: Vec<&transit_data::SystemConfig> =
         SYSTEMS.iter().filter(|c| only.is_empty() || only.iter().any(|o| o == c.id)).collect();
-    queue.sort_by_key(|c| dir.join(format!("{}.failed", c.id)).is_file());
+    // Saved files in the old format (English names only) are fetched again after the missing ones.
+    let outdated = |id: &str| -> bool {
+        use std::io::Read;
+        let mut head = [0u8; 4];
+        std::fs::File::open(dir.join(format!("{id}.tmap"))).and_then(|mut f| f.read_exact(&mut head)).is_ok()
+            && transit_data::is_outdated(&head)
+    };
+    queue.sort_by_key(|c| {
+        let missing = !dir.join(format!("{}.tmap", c.id)).is_file();
+        (dir.join(format!("{}.failed", c.id)).is_file(), !missing)
+    });
     for cfg in queue {
         let out = dir.join(format!("{}.tmap", cfg.id));
         if out.is_file() {
-            say(format!("{}: already saved, skipping", cfg.id));
-            continue;
+            if !outdated(cfg.id) {
+                say(format!("{}: already saved, skipping", cfg.id));
+                continue;
+            }
+            say(format!("{}: saved in the old format, fetching again", cfg.id));
         }
         // A batch size keeps one run short enough; the workflow starts the next batch by itself.
         if max > 0 && tried >= max {
@@ -339,7 +387,18 @@ pub struct Marker {
 pub struct StationLabel {
     pub at: Pos2,
     pub text: String,
+    /// Second line (English under the local name), "" if none.
+    pub sub: String,
     pub interchange: bool,
+}
+
+/// A station circle that was drawn this frame (for hover and click).
+pub struct ShownStation {
+    pub at: Pos2,
+    pub r: f32,
+    /// Index into the `systems` slice given to `draw`, and the station's index there.
+    pub sys: usize,
+    pub st: usize,
 }
 
 fn lerp(zf: f64, pts: &[(f64, f64)]) -> f32 {
@@ -379,8 +438,21 @@ fn fade(c: Color32, a: f32) -> Color32 {
     Color32::from_rgba_unmultiplied(r, g, b, (al as f32 * a).round().clamp(0.0, 255.0) as u8)
 }
 
+/// Size of a transit system's name on the globe: the size of a big city's label, or a little more.
+const MARKER_LABEL_SIZE: f32 = 17.0;
+
 fn marker_radius(zf: f64) -> f32 {
     lerp(zf, &[(2.0, 8.0), (5.0, 12.0), (9.0, 16.0)])
+}
+
+/// The text of a station's map label and the line to put under it: the local name with the English
+/// one below when both exist and `bilingual`, otherwise just one name.
+pub fn station_texts(st: &transit_data::Station, bilingual: bool) -> (String, String) {
+    if bilingual && !st.local.is_empty() && !st.name.is_empty() && st.local != st.name {
+        (st.local.clone(), st.name.clone())
+    } else {
+        (st.display().to_string(), String::new())
+    }
 }
 
 /// Metro symbols (a blue disc with an "M") for cities whose map is available. They fade out as the
@@ -409,13 +481,14 @@ pub fn draw_markers(painter: &egui::Painter, rect: egui::Rect, cam: &Camera, zf:
         painter.circle_filled(c, r, blue);
         painter.text(c, Align2::CENTER_CENTER, "M", FontId::proportional(r * 1.3), white);
         if zf >= 5.0 {
-            let font = FontId::proportional(13.0);
-            let at = c + egui::vec2(0.0, r + 13.0);
-            let halo = fade(Color32::from_black_alpha(200), a);
-            for (dx, dy) in [(-1.0_f32, 0.0_f32), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)] {
+            // black on a white halo, at least as big as a city name
+            let font = FontId::new(MARKER_LABEL_SIZE, crate::fonts::Fonts::bold_family());
+            let at = c + egui::vec2(0.0, r + 15.0);
+            let halo = fade(Color32::WHITE, a);
+            for (dx, dy) in [(-1.4_f32, 0.0_f32), (1.4, 0.0), (0.0, -1.4), (0.0, 1.4), (-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
                 painter.text(at + egui::vec2(dx, dy), Align2::CENTER_CENTER, m.title, font.clone(), halo);
             }
-            painter.text(at, Align2::CENTER_CENTER, m.title, font, white);
+            painter.text(at, Align2::CENTER_CENTER, m.title, font, fade(Color32::BLACK, a));
         }
     }
 }
@@ -437,8 +510,8 @@ pub fn marker_rects(cam: &Camera, rect: egui::Rect, zf: f64, markers: &[Marker])
         let c = rect.min + egui::vec2(s[0] as f32, s[1] as f32);
         let mut r2 = egui::Rect::from_center_size(c, egui::vec2(2.0 * r, 2.0 * r));
         if zf >= 5.0 {
-            let half = 3.6 * m.title.chars().count() as f32 + 4.0;
-            r2 = r2.union(egui::Rect::from_center_size(c + egui::vec2(0.0, r + 13.0), egui::vec2(2.0 * half, 18.0)));
+            let half = 4.7 * m.title.chars().count() as f32 + 4.0;
+            r2 = r2.union(egui::Rect::from_center_size(c + egui::vec2(0.0, r + 15.0), egui::vec2(2.0 * half, 24.0)));
         }
         out.push(r2);
     }
@@ -553,6 +626,8 @@ pub struct Opts<'a> {
     pub pick: Option<Pos2>,
     /// The highlighted line: its system and its index there.
     pub selected: Option<(&'a Arc<SystemData>, usize)>,
+    /// Show local names with English underneath where a station has both.
+    pub bilingual: bool,
 }
 
 pub struct Out {
@@ -563,6 +638,8 @@ pub struct Out {
     pub animating: bool,
     /// How fast the fastest train crosses the screen (pixels per second), to pick a redraw rate.
     pub motion_px_s: f32,
+    /// The station circles drawn this frame.
+    pub shown: Vec<ShownStation>,
 }
 
 /// Simulated trains: not a timetable, just evenly spread trains running out and back along each
@@ -594,7 +671,7 @@ pub fn draw(
     systems: &[Arc<SystemData>],
     o: &Opts,
 ) -> Out {
-    let mut out = Out { labels: Vec::new(), hit: None, animating: false, motion_px_s: 0.0 };
+    let mut out = Out { labels: Vec::new(), hit: None, animating: false, motion_px_s: 0.0, shown: Vec::new() };
     let fade_a = map_fade(zf);
     if fade_a <= 0.01 || systems.is_empty() {
         return out;
@@ -614,12 +691,12 @@ pub fn draw(
     let ink = Color32::from_rgb(35, 35, 45);
     let flat = o.flat_stations && cam.pitch > 0.12;
     let units_per_px = 2.0 * cam.alt * (FOV_Y * 0.5).tan() / h;
-    let mut stations: Vec<(Pos2, &transit_data::Station)> = Vec::new();
+    let mut stations: Vec<(Pos2, &transit_data::Station, usize, usize)> = Vec::new();
     let mut trains: Vec<(Pos2, Color32)> = Vec::new();
     let mut best_hit: Option<(f32, Arc<SystemData>, usize)> = None;
     let train_a = (((zf - TRAINS_FROM) / 1.0).clamp(0.0, 1.0) as f32) * fade_a;
 
-    for sys in systems {
+    for (si, sys) in systems.iter().enumerate() {
         if !may_be_visible(cam, sys, w / h) {
             continue;
         }
@@ -736,10 +813,10 @@ pub fn draw(
         }
 
         if zf >= STATIONS_FROM {
-            for st in &sys.stations {
+            for (sti, st) in sys.stations.iter().enumerate() {
                 if let Some(s) = to_screen(st.pos) {
                     if on_screen.contains(s) {
-                        stations.push((s, st));
+                        stations.push((s, st, si, sti));
                     }
                 }
             }
@@ -752,7 +829,7 @@ pub fn draw(
         let pts: Vec<Pos2> = stations.iter().map(|s| s.0).collect();
         let gaps = nearest_gaps(&pts, MIN_NAME_GAP);
         let r_zoom = lerp(zf, &[(10.0, 3.6), (11.0, 5.6), (14.0, 8.0), (17.0, 10.5)]);
-        for ((s, st), gap) in stations.iter().zip(gaps) {
+        for ((s, st, si, sti), gap) in stations.iter().zip(gaps) {
             if gap < MIN_STATION_GAP {
                 continue;
             }
@@ -768,8 +845,12 @@ pub fn draw(
                     painter.circle(*s, rr, Color32::WHITE, stroke);
                 }
             }
-            if !st.name.is_empty() && gap >= MIN_NAME_GAP {
-                out.labels.push(StationLabel { at: *s + egui::vec2(0.0, -(rr + 10.0)), text: st.name.clone(), interchange: inter });
+            out.shown.push(ShownStation { at: *s, r: rr, sys: *si, st: *sti });
+            if gap >= MIN_NAME_GAP {
+                let (text, sub) = station_texts(st, o.bilingual);
+                if !text.is_empty() {
+                    out.labels.push(StationLabel { at: *s + egui::vec2(0.0, -(rr + if sub.is_empty() { 10.0 } else { 16.0 })), text, sub, interchange: inter });
+                }
             }
         }
     }
@@ -799,6 +880,177 @@ pub fn marker_at(cam: &Camera, rect: egui::Rect, zf: f64, markers: &[Marker], at
         pr.visible(m.pos)
             && pr.project(m.pos).map_or(false, |s| (rect.min + egui::vec2(s[0] as f32, s[1] as f32)).distance(at) <= r)
     })
+}
+
+// ---------------------------------------------------------------------------
+// Platform sign
+// ---------------------------------------------------------------------------
+
+/// The stations on either side of `st` along `line`: [left, right] (west before east on screen,
+/// north up). The nearest neighbour comes first; the second is the nearest one lying the other way.
+pub fn sign_neighbours(sys: &SystemData, st: usize, line: usize) -> [Option<usize>; 2] {
+    let Some(me) = sys.stations.get(st) else { return [None, None] };
+    let rel = |s: usize| -> V3 {
+        let p = sys.stations[s].pos;
+        [p[0] - me.pos[0], p[1] - me.pos[1], p[2] - me.pos[2]]
+    };
+    let len2 = |v: V3| v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+    let mut near: Vec<usize> =
+        me.nbrs.iter().filter(|(l, s)| *l as usize == line && (*s as usize) < sys.stations.len() && *s as usize != st).map(|&(_, s)| s as usize).collect();
+    near.sort_by(|&a, &b| len2(rel(a)).partial_cmp(&len2(rel(b))).unwrap_or(std::cmp::Ordering::Equal));
+    near.dedup();
+    let Some(&a) = near.first() else { return [None, None] };
+    let b = near.iter().skip(1).copied().find(|&s| dot(rel(s), rel(a)) < 0.0);
+    // Which one is "left": the one further west (smaller longitude), else the southern one.
+    let key = |s: usize| {
+        let (lon, lat) = crate::camera::vec_to_lonlat(sys.stations[s].pos);
+        (lon, lat)
+    };
+    match b {
+        Some(b) => {
+            let (ka, kb) = (key(a), key(b));
+            if (ka.0 - kb.0).abs() > 1e-9 && ka.0 < kb.0 || ((ka.0 - kb.0).abs() <= 1e-9 && ka.1 < kb.1) {
+                [Some(a), Some(b)]
+            } else {
+                [Some(b), Some(a)]
+            }
+        }
+        None => {
+            let (km, ka) = (crate::camera::vec_to_lonlat(me.pos), key(a));
+            if ka.0 < km.0 {
+                [Some(a), None]
+            } else {
+                [None, Some(a)]
+            }
+        }
+    }
+}
+
+/// Text laid out at `size`, shrunk to fit `max_w` if it is too wide.
+fn fit_text(painter: &egui::Painter, text: &str, size: f32, bold: bool, color: Color32, max_w: f32) -> Arc<egui::Galley> {
+    let family = if bold { crate::fonts::Fonts::bold_family() } else { crate::fonts::Fonts::family() };
+    let g = painter.layout_no_wrap(text.to_string(), FontId::new(size, family.clone()), color);
+    let w = g.size().x;
+    if w <= max_w || w <= 0.0 {
+        return g;
+    }
+    painter.layout_no_wrap(text.to_string(), FontId::new((size * max_w / w).max(7.0), family), color)
+}
+
+pub const SIGN_W: f32 = 304.0;
+pub const SIGN_H: f32 = 142.0;
+
+/// A station sign like the ones on a Japanese platform: the name big, its reading above or below,
+/// a bar in the line's colour with the neighbouring stations at either end and this station in the
+/// middle, and the English name underneath. `anchor` is the point the sign's bottom edge points at.
+pub fn draw_sign(painter: &egui::Painter, clip: egui::Rect, anchor: Pos2, sys: &SystemData, st_i: usize, line_pick: usize) {
+    let Some(st) = sys.stations.get(st_i) else { return };
+    let line_i = if st.lines.is_empty() { None } else { Some(st.lines[line_pick % st.lines.len()]) };
+    let line = line_i.and_then(|i| sys.lines.get(i));
+    let lc = line.map_or([60, 120, 200], |l| l.color);
+    let line_col = Color32::from_rgb(lc[0], lc[1], lc[2]);
+    let block_col = Color32::from_rgb(
+        (lc[0] as u16 * 45 / 100 + 255 * 55 / 100) as u8,
+        (lc[1] as u16 * 45 / 100 + 255 * 55 / 100) as u8,
+        (lc[2] as u16 * 45 / 100 + 255 * 55 / 100) as u8,
+    );
+    let ink = Color32::from_rgb(28, 28, 32);
+
+    let mut min = anchor + egui::vec2(-SIGN_W * 0.5, -SIGN_H - 14.0);
+    min.x = min.x.clamp(clip.min.x + 4.0, (clip.max.x - SIGN_W - 4.0).max(clip.min.x + 4.0));
+    min.y = min.y.max(clip.min.y + 4.0);
+    let r = egui::Rect::from_min_size(min, egui::vec2(SIGN_W, SIGN_H));
+    painter.rect_filled(r.translate(egui::vec2(0.0, 3.0)).expand(1.0), 9.0, Color32::from_black_alpha(80));
+    painter.rect_filled(r, 8.0, Color32::from_rgb(252, 252, 250));
+    painter.rect_stroke(r, 8.0, Stroke::new(4.0_f32, ink), egui::StrokeKind::Inside);
+
+    let cx = r.center().x;
+    // the name: local script big, with its reading; otherwise the English name big
+    let (big, small) = if st.local.is_empty() { (st.name.as_str(), "") } else { (st.local.as_str(), st.name.as_str()) };
+    let g = fit_text(painter, big, 34.0, true, ink, SIGN_W - 96.0);
+    painter.galley(egui::pos2(cx - g.size().x * 0.5, r.min.y + 30.0 - g.size().y * 0.5), g, ink);
+    let under = if !st.kana.is_empty() {
+        st.kana.as_str()
+    } else {
+        ""
+    };
+    if !under.is_empty() {
+        let g = fit_text(painter, under, 12.5, false, Color32::from_rgb(70, 70, 75), SIGN_W - 120.0);
+        painter.galley(egui::pos2(cx - g.size().x * 0.5, r.min.y + 54.0), g, ink);
+    }
+
+    // line code box (top right): "JY03", else the line's badge
+    let code = if !st.code.is_empty() { st.code.as_str() } else { line.map_or("", |l| l.badge.as_str()) };
+    if !code.is_empty() {
+        let g = fit_text(painter, code, 12.0, true, ink, 44.0);
+        let b = egui::Rect::from_center_size(egui::pos2(r.max.x - 32.0, r.min.y + 24.0), egui::vec2(g.size().x + 12.0, 22.0));
+        painter.rect_stroke(b, 3.0, Stroke::new(2.0_f32, ink), egui::StrokeKind::Inside);
+        painter.galley(b.center() - g.size() * 0.5, g, ink);
+    }
+
+    // the bar
+    let [left, right] = sign_neighbours(sys, st_i, line_i.unwrap_or(usize::MAX));
+    let bar_y0 = r.min.y + 76.0;
+    let bar_y1 = bar_y0 + 28.0;
+    let (x0, x1) = (r.min.x + 4.0, r.max.x - 4.0);
+    let mid_y = (bar_y0 + bar_y1) * 0.5;
+    painter.add(egui::Shape::convex_polygon(
+        vec![egui::pos2(x0, bar_y0), egui::pos2(x1 - 16.0, bar_y0), egui::pos2(x1, mid_y), egui::pos2(x1 - 16.0, bar_y1), egui::pos2(x0, bar_y1)],
+        line_col,
+        Stroke::NONE,
+    ));
+    let block_w = 22.0;
+    painter.rect_filled(egui::Rect::from_min_max(egui::pos2(cx - block_w * 0.5, bar_y0), egui::pos2(cx + block_w * 0.5, bar_y1)), 0.0, block_col);
+    let side_w = (SIGN_W * 0.5 - block_w * 0.5 - 18.0).max(40.0);
+    let white = Color32::WHITE;
+    let pick_names = |n: Option<usize>| -> (String, String) {
+        match n.and_then(|i| sys.stations.get(i)) {
+            Some(s) if !s.local.is_empty() => (s.local.clone(), s.name.clone()),
+            Some(s) => (s.name.clone(), String::new()),
+            None => (String::new(), String::new()),
+        }
+    };
+    let (lj, le) = pick_names(left);
+    let (rj, re) = pick_names(right);
+    if !lj.is_empty() {
+        let g = fit_text(painter, &lj, 13.5, true, white, side_w);
+        painter.galley(egui::pos2(x0 + 8.0, mid_y - g.size().y * 0.5), g, white);
+    }
+    if !rj.is_empty() {
+        let g = fit_text(painter, &rj, 13.5, true, white, side_w);
+        painter.galley(egui::pos2(x1 - 22.0 - g.size().x, mid_y - g.size().y * 0.5), g, white);
+    }
+    // English under the bar: neighbours small at the ends, this station in the middle
+    let grey = Color32::from_rgb(50, 50, 55);
+    let en_y = bar_y1 + 7.0;
+    if !le.is_empty() {
+        let g = fit_text(painter, &le, 10.5, false, grey, side_w);
+        painter.galley(egui::pos2(x0 + 8.0, en_y), g, grey);
+    }
+    if !re.is_empty() {
+        let g = fit_text(painter, &re, 10.5, false, grey, side_w);
+        painter.galley(egui::pos2(x1 - 22.0 - g.size().x, en_y), g, grey);
+    }
+    if !small.is_empty() {
+        let g = fit_text(painter, small, 15.0, true, ink, block_w + 40.0);
+        painter.galley(egui::pos2(cx - g.size().x * 0.5, en_y - 1.0), g, ink);
+    }
+    // more than one line serves this station: little dots, the shown one filled
+    if st.lines.len() > 1 {
+        let n = st.lines.len().min(8);
+        let y = r.max.y - 10.0;
+        let x_start = cx - (n as f32 - 1.0) * 7.0;
+        for k in 0..n {
+            let c = sys.lines.get(st.lines[k]).map_or([120, 120, 120], |l| l.color);
+            let col = Color32::from_rgb(c[0], c[1], c[2]);
+            let at = egui::pos2(x_start + k as f32 * 14.0, y);
+            if k == line_pick % st.lines.len() {
+                painter.circle(at, 4.5, col, Stroke::new(1.5_f32, ink));
+            } else {
+                painter.circle_stroke(at, 3.5, Stroke::new(1.5_f32, col));
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -868,5 +1120,49 @@ mod tests {
         assert!((dist_to_polyline(Pos2::new(50.0, 4.0), &pts) - 4.0).abs() < 1e-4);
         assert!((dist_to_polyline(Pos2::new(104.0, 50.0), &pts) - 4.0).abs() < 1e-4);
         assert!(dist_to_polyline(Pos2::new(50.0, 40.0), &pts) > 30.0);
+    }
+
+    #[test]
+    fn the_sign_picks_the_two_neighbours_on_opposite_sides() {
+        use crate::transit_data::{Station, TLine, Track};
+        use crate::camera::lonlat_to_vec;
+        let st = |name: &str, lon: f64| Station {
+            name: name.into(),
+            local: String::new(),
+            kana: String::new(),
+            code: String::new(),
+            pos: lonlat_to_vec(lon.to_radians(), 0.6),
+            lines: vec![0],
+            nbrs: Vec::new(),
+        };
+        let mut d = SystemData::default();
+        d.lines.push(TLine { name: "L".into(), local: String::new(), badge: String::new(), color: [0, 150, 0], paths: Vec::new(), track: Track::default() });
+        d.stations = vec![st("west", 0.0), st("mid", 0.01), st("east", 0.02), st("far east", 0.05)];
+        // mid is next to west, east and (as an express) far east
+        d.stations[1].nbrs = vec![(0, 3), (0, 2), (0, 0)];
+        let [l, r] = sign_neighbours(&d, 1, 0);
+        assert_eq!((l, r), (Some(0), Some(2)), "nearest each way, west on the left");
+        // an end of the line has one neighbour, on the side it lies
+        d.stations[0].nbrs = vec![(0, 1)];
+        assert_eq!(sign_neighbours(&d, 0, 0), [None, Some(1)]);
+        assert_eq!(sign_neighbours(&d, 0, 7), [None, None], "another line: none");
+    }
+
+    #[test]
+    fn station_labels_show_local_over_english_when_asked() {
+        use crate::transit_data::Station;
+        let s = Station {
+            name: "Akihabara".into(),
+            local: "秋葉原".into(),
+            kana: String::new(),
+            code: String::new(),
+            pos: [0.0, 0.0, 1.0],
+            lines: vec![],
+            nbrs: vec![],
+        };
+        assert_eq!(station_texts(&s, true), ("秋葉原".to_string(), "Akihabara".to_string()));
+        assert_eq!(station_texts(&s, false), ("Akihabara".to_string(), String::new()));
+        let only_local = Station { name: String::new(), ..s };
+        assert_eq!(station_texts(&only_local, false).0, "秋葉原");
     }
 }

@@ -36,6 +36,9 @@ jobs:
           New-Item -ItemType Directory -Path dist/$name | Out-Null
           Copy-Item target/release/rustymaps.exe dist/$name/
           Copy-Item README.md dist/$name/
+          # Ship every transit map saved in the repo, in the folder the app reads at start-up.
+          New-Item -ItemType Directory -Path dist/$name/data/transit | Out-Null
+          Copy-Item assets/transit/*.tmap dist/$name/data/transit/
           Compress-Archive -Path dist/$name/* -DestinationPath "dist/$name.zip"
           "ZIP_NAME=$name.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
 

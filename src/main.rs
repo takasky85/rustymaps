@@ -37,8 +37,6 @@ use tiles::TileManager;
 use transit::{StationLabel, TransitManager};
 use transit_data::{SystemData, SYSTEMS};
 
-const SF_LON: f64 = -122.4194;
-const SF_LAT: f64 = 37.7749;
 const CITY_ZOOM: f64 = 12.5;
 
 /// Picks the most capable GPU: discrete before integrated before software,
@@ -194,6 +192,15 @@ struct Plane {
     radius_m: Option<f64>,
 }
 
+/// A platform sign on screen: for a station, either just hovered or pinned by a click.
+struct Sign {
+    sys: Arc<SystemData>,
+    st: usize,
+    /// Which of the station's lines the sign shows (clicking the pinned station again moves on).
+    line: usize,
+    pinned: bool,
+}
+
 struct App {
     cam: Camera,
     tiles: TileManager,
@@ -238,7 +245,19 @@ struct App {
     /// Time of the previous frame, for advancing the flights by real elapsed time.
     last_anim: f64,
     labels_shown: std::collections::HashSet<u64>,
-    coast: globe::Coast,
+    land: globe::Land,
+    /// The mini globe's picture, redrawn only when the view turns.
+    globe_tex: Option<egui::TextureHandle>,
+    globe_key: [f64; 4],
+    /// Local station names with English underneath (where both exist).
+    bilingual: bool,
+    /// The platform sign being shown for a station.
+    sign: Option<Sign>,
+    /// Ids of favourite transit systems (Places tab).
+    favorites: Vec<String>,
+    places_filter: String,
+    /// The "transit here" list in the upper right is folded away.
+    systems_folded: bool,
     /// Camera as of the previous frame, to tell when the view is moving.
     prev_cam: [f64; 7],
     pacer: Pacer,
@@ -352,7 +371,14 @@ impl App {
             anim_fps: 60,
             last_anim: 0.0,
             labels_shown: Default::default(),
-            coast: globe::Coast::load(),
+            land: globe::Land::load(),
+            globe_tex: None,
+            globe_key: [f64::NAN; 4],
+            bilingual: true,
+            sign: None,
+            favorites: Vec::new(),
+            places_filter: String::new(),
+            systems_folded: false,
             prev_cam: [0.0; 7],
             pacer: Pacer::new(&cc.egui_ctx),
             input_frames: 0,
@@ -381,7 +407,8 @@ impl App {
         let dist = dot(self.cam.dir(), to.dir()).clamp(-1.0, 1.0).acos();
         let hi = self.cam.alt.max(to.alt);
         let peak = (dist * 4.0).min(2.4).max(hi);
-        let duration = (min_duration + dist * 2.5).min(9.0);
+        // long trips take their time, and the last part (coming down) is the slowest
+        let duration = (min_duration + dist * 3.8).min(13.0);
         self.fly = Some(Fly { from: self.cam, to, start: now, duration, peak });
     }
 
@@ -422,8 +449,16 @@ impl App {
         let pe = e * e * (3.0 - 2.0 * e); // the ground moves most while we are high up
         let dlon = camera::wrap_pi(f.to.lon - f.from.lon);
         let (la0, la1) = (f.from.alt.ln(), f.to.alt.ln());
-        let extra = (f.peak.ln() - 0.5 * (la0 + la1)).max(0.0);
-        let ln_alt = la0 + (la1 - la0) * e + extra * (std::f64::consts::PI * e).sin();
+        let lp = f.peak.ln().max(la0).max(la1);
+        // Climb in the first part of the trip, stay high while the ground slides by, and only come
+        // down once the destination is nearly under us: the zoom-in stays gentle and late.
+        let smooth = |x: f64| {
+            let x = x.clamp(0.0, 1.0);
+            x * x * (3.0 - 2.0 * x)
+        };
+        let up = smooth(pe / 0.3);
+        let down = smooth((pe - 0.62) / 0.38);
+        let ln_alt = la0 + (lp - la0) * up + (la1 - lp) * down;
         self.cam = Camera {
             lon: f.from.lon + dlon * pe,
             lat: f.from.lat + (f.to.lat - f.from.lat) * pe,
@@ -456,18 +491,81 @@ impl App {
 
     /// The compass rose (bottom right): points to north, click to put north back up.
     /// The small globe in the bottom-right corner (click it to put the map north-up and flat).
+    /// A small list in the upper right, shown while the view is zoomed into a place served by more
+    /// than one transit system: switch each on or off and choose which is drawn on top.
+    fn systems_popup(&mut self, ctx: &egui::Context, rect: egui::Rect, zf: f64) {
+        if zf < transit::MAP_FULL {
+            return;
+        }
+        let near = self.transit.nearby(&self.cam, (rect.width() / rect.height().max(1.0)) as f64);
+        if near.len() < 2 {
+            return;
+        }
+        let mut toggle: Option<(usize, bool)> = None;
+        let mut shift: Option<(usize, bool)> = None;
+        egui::Area::new(egui::Id::new("systems_here")).anchor(egui::Align2::RIGHT_TOP, egui::vec2(-10.0, 64.0)).show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_max_width(270.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(format!("Transit here ({})", near.len())).strong());
+                    if ui.small_button(if self.systems_folded { "▸" } else { "▾" }).on_hover_text("Fold or unfold").clicked() {
+                        self.systems_folded = !self.systems_folded;
+                    }
+                });
+                if self.systems_folded {
+                    return;
+                }
+                for (n, &slot) in near.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        let mut on = self.transit.enabled(slot);
+                        if ui.checkbox(&mut on, self.transit.title(slot)).changed() {
+                            toggle = Some((slot, on));
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.add_enabled(n + 1 < near.len(), egui::Button::new("▼").small()).on_hover_text("Draw under the next one").clicked() {
+                                shift = Some((slot, false));
+                            }
+                            if ui.add_enabled(n > 0, egui::Button::new("▲").small()).on_hover_text("Draw over the one above").clicked() {
+                                shift = Some((slot, true));
+                            }
+                        });
+                    });
+                }
+                ui.small("Top of the list is drawn on top.");
+            });
+        });
+        if let Some((slot, on)) = toggle {
+            self.transit.set_enabled(slot, on);
+        }
+        if let Some((slot, up)) = shift {
+            self.transit.shift_priority(slot, up, &near);
+        }
+    }
+
     fn compass(&mut self, ctx: &egui::Context, now: f64) {
         let tilt = self.cam.pitch.to_degrees();
-        let blink = (now * 1.6).fract() < 0.6;
         let (lon, lat, heading) = (self.cam.lon, self.cam.lat, self.cam.heading);
+        let _ = now;
+        // The picture is made again only when the view has turned (about a fifth of a degree).
+        let size = 118.0_f32;
+        let r = size * 0.5 - 6.0;
+        let ppp = ctx.pixels_per_point();
+        let key = [(lon * 300.0).round(), (lat * 300.0).round(), (heading * 300.0).round(), ppp as f64];
+        if key != self.globe_key || self.globe_tex.is_none() {
+            let dim = ((2.0 * (r + 1.0)) * ppp).ceil() as usize;
+            let img = self.land.render(dim.clamp(32, 512), lon, lat, heading);
+            match &mut self.globe_tex {
+                Some(t) => t.set(img, egui::TextureOptions::LINEAR),
+                None => self.globe_tex = Some(ctx.load_texture("mini-globe", img, egui::TextureOptions::LINEAR)),
+            }
+            self.globe_key = key;
+        }
         let mut clicked = false;
-        let coast = &self.coast;
+        let tex = self.globe_tex.as_ref();
         egui::Area::new(egui::Id::new("compass")).anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-18.0, -18.0)).show(ctx, |ui| {
-            let size = 118.0;
             let (rect, resp) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
             let p = ui.painter_at(rect.expand(8.0));
-            let r = size * 0.5 - 6.0;
-            globe::draw(&p, rect.center(), r, coast, lon, lat, heading, blink);
+            globe::draw(&p, rect.center(), r, tex, lon, lat, heading);
             if tilt > 1.0 {
                 p.text(
                     egui::pos2(rect.center().x, rect.max.y + 4.0),
@@ -598,7 +696,15 @@ impl eframe::App for App {
                 self.cam.normalize();
             }
         }
+        if ctx.input(|i| i.key_pressed(egui::Key::F11)) {
+            let on = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!on));
+        }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.sign = None;
+            if ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)) && self.tab.is_none() && self.selected_line.is_none() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+            }
             self.selected_line = None;
             self.tab = None;
             self.search_open = false;
@@ -734,6 +840,7 @@ impl eframe::App for App {
                     train_speed: TRAIN_SPEEDS[self.train_speed].1,
                     pick: if marker_click.is_none() { click } else { None },
                     selected: self.selected_line.as_ref().map(|(a, i)| (a, *i)),
+                    bilingual: self.bilingual,
                 };
                 transit::draw(&painter, rect, &self.cam, zf, &systems, &opts)
             };
@@ -746,16 +853,52 @@ impl eframe::App for App {
             for l in out.labels {
                 extras.push(Cand::from_station(l));
             }
+            // A station under the pointer: its platform sign shows while hovering, and stays when clicked.
+            let near_station = |p: egui::Pos2| -> Option<(usize, usize)> {
+                out.shown
+                    .iter()
+                    .filter(|s| s.at.distance(p) <= s.r + 6.0)
+                    .min_by(|a, b| a.at.distance(p).partial_cmp(&b.at.distance(p)).unwrap_or(std::cmp::Ordering::Equal))
+                    .map(|s| (s.sys, s.st))
+            };
+            let station_click = click.and_then(near_station);
+            let hover_station = resp.hover_pos().and_then(near_station);
+            if hover_station.is_some() {
+                ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if let Some((si, sti)) = station_click {
+                let same = matches!(&self.sign, Some(g) if g.pinned && Arc::ptr_eq(&g.sys, &systems[si]) && g.st == sti);
+                if same {
+                    if let Some(g) = &mut self.sign {
+                        g.line += 1;
+                    }
+                } else {
+                    self.sign = Some(Sign { sys: systems[si].clone(), st: sti, line: 0, pinned: true });
+                }
+            }
             if let Some(mi) = marker_click {
                 let (lat, lon) = markers[mi].home;
                 self.goto_city(lon, lat, now);
+            } else if station_click.is_some() {
+                // the sign is the answer to this click; leave the line selection alone
             } else if click.is_some() {
                 if line_hit.is_none() {
                     self.tab = None;
                     self.search_open = false;
+                    self.sign = None;
                 }
                 self.selected_line = line_hit;
             }
+            // Hovering shows a sign too (unless one is pinned); it goes away when the pointer leaves.
+            let hover_sign = match (hover_station, &self.sign) {
+                (Some((si, sti)), s) if !matches!(s, Some(g) if g.pinned) => {
+                    let line = self.selected_line.as_ref().and_then(|(a, li)| {
+                        Arc::ptr_eq(a, &systems[si]).then(|| systems[si].stations[sti].lines.iter().position(|l| l == li)).flatten()
+                    });
+                    Some((si, sti, line.unwrap_or(0)))
+                }
+                _ => None,
+            };
             let mut draws: Vec<PlaneDraw> = Vec::new();
             let mut bounds: Option<[f32; 4]> = None; // screen box around all planes (NDC)
             let mut whole_screen = false;
@@ -806,6 +949,19 @@ impl eframe::App for App {
                 ));
             }
 
+            // --- the platform sign of a station: on top of the map, the labels and the aircraft ---
+            if let Some((si, sti, line)) = hover_sign {
+                if let Some(at) = out.shown.iter().find(|s| s.sys == si && s.st == sti).map(|s| s.at) {
+                    transit::draw_sign(&painter, rect, at - egui::vec2(0.0, 6.0), &systems[si], sti, line);
+                }
+            } else if let Some(g) = &self.sign {
+                // pinned: find where its station is on screen now (it may have moved or gone)
+                let shown = systems.iter().position(|s| Arc::ptr_eq(s, &g.sys)).and_then(|si| out.shown.iter().find(|s| s.sys == si && s.st == g.st));
+                if let Some(s) = shown {
+                    transit::draw_sign(&painter, rect, s.at - egui::vec2(0.0, 6.0), &g.sys, g.st, g.line);
+                }
+            }
+
             // --- name of the highlighted subway line ---
             if let Some((sys, li)) = &self.selected_line {
                 if let Some(line) = sys.lines.get(*li) {
@@ -844,14 +1000,12 @@ impl eframe::App for App {
         let moving = cam_now != self.prev_cam;
         self.prev_cam = cam_now;
         ctx.tessellation_options_mut(|o| o.round_text_to_pixels = !moving);
-        if self.show_compass {
-            anim_wait = anim_wait.min(0.3); // the position dot flashes
-        }
         self.pacer.set(anim_wait);
         if self.show_compass {
             self.compass(ctx, now);
         }
         self.controls(ctx, rect_for_ui, now, zf_for_ui);
+        self.systems_popup(ctx, rect_for_ui, zf_for_ui);
 
         if now - self.saved_at > 1.0 {
             self.saved_at = now;
@@ -986,6 +1140,8 @@ struct Cand {
     angle: f32,
     /// Identity across frames (hash of the text), so labels shown last frame keep their place.
     key: u64,
+    /// A smaller second line under the text (the English name under a local one); "" for none.
+    sub: String,
 }
 
 impl Cand {
@@ -993,12 +1149,14 @@ impl Cand {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         text.hash(&mut h);
-        Cand { priority, text, size, color, halo, at, angle: 0.0, key: h.finish() }
+        Cand { priority, text, size, color, halo, at, angle: 0.0, key: h.finish(), sub: String::new() }
     }
 
     fn from_station(l: StationLabel) -> Self {
         let priority = if l.interchange { 9.5 } else { 17.0 };
-        Cand::new(priority, l.text, if l.interchange { 12.5 } else { 11.5 }, [20, 20, 30], [255, 255, 255], l.at)
+        let mut c = Cand::new(priority, l.text, if l.interchange { 12.5 } else { 11.5 }, [20, 20, 30], [255, 255, 255], l.at);
+        c.sub = l.sub;
+        c
     }
 }
 
@@ -1083,8 +1241,16 @@ fn draw_labels(
         let main = painter.layout_no_wrap(c.text.clone(), font.clone(), col);
         let (sn, cs) = c.angle.sin_cos();
         let size = main.size();
+        // an optional smaller second line (English under a local name); never on turned text
+        let sub = (c.angle == 0.0 && !c.sub.is_empty())
+            .then(|| painter.layout_no_wrap(c.sub.clone(), egui::FontId::new(c.size * ls.scale * 0.84, ls.family.clone()), col));
+        let sub_size = sub.as_ref().map_or(egui::Vec2::ZERO, |g| g.size());
         // box around the (possibly turned) text, for collisions
-        let ext = egui::vec2(size.x * cs.abs() + size.y * sn.abs(), size.x * sn.abs() + size.y * cs.abs());
+        let ext = if sub.is_some() {
+            egui::vec2(size.x.max(sub_size.x), size.y + sub_size.y)
+        } else {
+            egui::vec2(size.x * cs.abs() + size.y * sn.abs(), size.x * sn.abs() + size.y * cs.abs())
+        };
         let r = egui::Rect::from_center_size(c.at, ext);
         let padded = r.expand2(egui::vec2(4.0, 2.0));
         if placed.iter().any(|p| p.intersects(padded)) {
@@ -1105,15 +1271,24 @@ fn draw_labels(
             continue;
         }
         let o = 1.3 + bold * 1.4;
+        let main_at = r.min + egui::vec2((ext.x - size.x) * 0.5, 0.0);
         for (dx, dy) in [(-o, 0.0), (o, 0.0), (0.0, -o), (0.0, o), (-o, -o), (o, -o), (-o, o), (o, o)] {
-            painter.galley(r.min + egui::vec2(dx, dy), shadow.clone(), halo);
+            painter.galley(main_at + egui::vec2(dx, dy), shadow.clone(), halo);
         }
         if fake_bold {
             // No bold face is installed: fatten the strokes by drawing the text a little off-centre.
             for (dx, dy) in [(-bold, 0.0), (bold, 0.0), (0.0, -bold * 0.6), (0.0, bold * 0.6)] {
-                painter.galley(r.min + egui::vec2(dx, dy), main.clone(), col);
+                painter.galley(main_at + egui::vec2(dx, dy), main.clone(), col);
             }
         }
-        painter.galley(r.min, main, col);
+        painter.galley(main_at, main, col);
+        if let Some(g) = sub {
+            let sub_at = r.min + egui::vec2((ext.x - sub_size.x) * 0.5, size.y);
+            let sub_shadow = painter.layout_no_wrap(c.sub.clone(), egui::FontId::new(c.size * ls.scale * 0.84, ls.family.clone()), halo);
+            for (dx, dy) in [(-1.2_f32, 0.0_f32), (1.2, 0.0), (0.0, -1.2), (0.0, 1.2), (-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+                painter.galley(sub_at + egui::vec2(dx, dy), sub_shadow.clone(), halo);
+            }
+            painter.galley(sub_at, g, col);
+        }
     }
 }
