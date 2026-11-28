@@ -4,6 +4,9 @@
 
 use eframe::egui::{self, Color32, RichText, Sense, Shape, Stroke};
 
+use std::sync::Arc;
+
+use crate::phonesync::{self, PhoneSync};
 use crate::transit;
 use crate::App;
 
@@ -98,15 +101,34 @@ fn gap_line(ui: &egui::Ui, rows: &[egui::Rect], at: usize) {
 }
 
 impl App {
+    /// Starts or stops listening for the phone tracker.
+    pub(crate) fn set_phone_sync(&mut self, ctx: &egui::Context, on: bool) {
+        self.phone_sync_on = on;
+        if on && self.phone_sync.is_none() {
+            let c = ctx.clone();
+            self.phone_sync = Some(PhoneSync::start(
+                self.tracks.dir().to_path_buf(),
+                self.data_dir.join("sync.txt"),
+                phonesync::TCP_PORT,
+                phonesync::UDP_PORT,
+                Arc::new(move || c.request_repaint()),
+            ));
+        } else if !on {
+            self.phone_sync = None; // dropping it stops the listeners
+        }
+    }
+
     /// The panel under the Layers button.
     pub(crate) fn layers_popup(&mut self, ctx: &egui::Context, at: egui::Pos2, button: egui::Rect, now: f64) {
         if !self.layers_open {
             return;
         }
         let mut go: Option<usize> = None;
+        let mut sync_toggle: Option<bool> = None;
+        let mut forget_phone: Option<String> = None;
         let resp = egui::Area::new(egui::Id::new("layers_panel")).order(egui::Order::Foreground).fixed_pos(at).show(ctx, |ui| {
             egui::Frame::window(&ctx.style()).fill(Color32::from_black_alpha(235)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
-                ui.set_width(310.0);
+                ui.set_width(330.0);
                 ui.label(RichText::new("Layers").strong());
                 ui.separator();
                 ui.checkbox(&mut self.show_transit, "Transit map");
@@ -144,8 +166,56 @@ impl App {
                         ui.small(format!("Tracks are kept in {}", self.tracks.dir().display()));
                     });
                 });
+                ui.add_space(4.0);
+                let mut sync_on = self.phone_sync_on;
+                if ui.checkbox(&mut sync_on, "Phone sync (tracks arrive over WiFi)").changed() {
+                    sync_toggle = Some(sync_on);
+                }
+                if let Some(sync) = &self.phone_sync {
+                    let snap = sync.snapshot();
+                    ui.indent("layers_sync", |ui| {
+                        if !snap.error.is_empty() {
+                            ui.colored_label(Color32::from_rgb(255, 130, 110), snap.error.clone());
+                        }
+                        let ip = phonesync::local_ip().map(|a| a.to_string()).unwrap_or_else(|| "unknown".into());
+                        ui.small(format!("This computer: {} ({})", snap.desk_name, ip));
+                        match snap.code {
+                            Some(code) => {
+                                ui.label(RichText::new(code).monospace().size(28.0).strong());
+                                ui.small(format!("Type this code on the phone (open for {} more seconds).", snap.code_secs_left));
+                                if ui.button("Cancel pairing").clicked() {
+                                    sync.cancel_pairing();
+                                }
+                                ctx.request_repaint_after(std::time::Duration::from_secs(1));
+                            }
+                            None => {
+                                if ui.button("Pair a phone").clicked() {
+                                    sync.begin_pairing();
+                                }
+                            }
+                        }
+                        for (id, name) in &snap.phones {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("Paired: {}", clip(name, 28)));
+                                if ui.small_button("Forget").on_hover_text("Stop accepting tracks from this phone").clicked() {
+                                    forget_phone = Some(id.clone());
+                                }
+                            });
+                        }
+                        for line in snap.log.iter().rev().take(4) {
+                            ui.small(clip(line, 52));
+                        }
+                        ui.small("Windows may ask to allow network access the first time: choose Private networks.");
+                    });
+                }
             });
         });
+        if let Some(on) = sync_toggle {
+            self.set_phone_sync(ctx, on);
+        }
+        if let (Some(id), Some(sync)) = (forget_phone, &self.phone_sync) {
+            sync.forget(&id);
+        }
         if let Some(i) = go {
             let (lon, lat) = self.tracks.items[i].track.lon_lat_deg();
             let zoom = crate::zoom_for_span(self.tracks.items[i].track.radius * 2.0, lat.to_radians(), self.view_h);
@@ -179,7 +249,8 @@ impl App {
             ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
         }
         let dragging_system = matches!(self.dnd, Some(Dnd::System(_)));
-        let max_h = (rect.height() - 64.0 - 150.0).clamp(160.0, 680.0);
+        // As tall as the window allows (keeping clear of the mini globe in the corner, when it is shown).
+        let max_h = (rect.height() - 64.0 - if self.show_compass { 170.0 } else { 30.0 }).max(160.0);
 
         let mut toggle: Option<(usize, bool)> = None;
         let mut line_hidden: Vec<(usize, usize, bool)> = Vec::new();
@@ -187,6 +258,8 @@ impl App {
         let mut new_systems: Option<Vec<usize>> = None;
         let mut new_lines: Option<(usize, Vec<usize>)> = None;
         let mut started: Option<Dnd> = None;
+        let mut system_to_top: Option<usize> = None;
+        let mut line_to_top: Option<(usize, usize)> = None;
 
         egui::Area::new(egui::Id::new("systems_here")).anchor(egui::Align2::RIGHT_TOP, egui::vec2(-10.0, 64.0)).show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
@@ -200,7 +273,7 @@ impl App {
                 if self.systems_folded {
                     return;
                 }
-                ui.small("Drag the grip to move a row. The top is drawn on top.");
+                ui.small("Drag a grip to move a row, or press Top. The top row is drawn on top.");
                 egui::ScrollArea::vertical().max_height(max_h).auto_shrink([true, true]).show(ui, |ui| {
                     let mut groups: Vec<egui::Rect> = Vec::new();
                     for &slot in &near {
@@ -219,9 +292,15 @@ impl App {
                                 if ui.checkbox(&mut on, self.transit.title(slot)).changed() {
                                     toggle = Some((slot, on));
                                 }
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    let is_top = near.first() == Some(&slot);
+                                    if ui.add_enabled(!is_top, egui::Button::new("Top").small()).on_hover_text("Draw this system on top of the others").clicked() {
+                                        system_to_top = Some(slot);
+                                    }
+                                });
                             });
                             if open {
-                                self.lines_list(ui, ctx, slot, released, pointer_y, &mut line_hidden, &mut all_lines, &mut new_lines, &mut started);
+                                self.lines_list(ui, ctx, slot, released, pointer_y, &mut line_hidden, &mut all_lines, &mut new_lines, &mut started, &mut line_to_top);
                             }
                         });
                         groups.push(group.response.rect);
@@ -255,6 +334,16 @@ impl App {
                 }
             }
         }
+        if let Some(slot) = system_to_top {
+            let mut order: Vec<usize> = near.iter().copied().filter(|&s| s != slot).collect();
+            order.insert(0, slot);
+            self.transit.reorder_systems(&order);
+        }
+        if let Some((slot, li)) = line_to_top {
+            let mut order: Vec<usize> = self.transit.prefs(slot).order.iter().rev().copied().filter(|&l| l != li).collect();
+            order.insert(0, li);
+            self.transit.reorder_lines(slot, &order);
+        }
         if let Some(order) = new_systems {
             self.transit.reorder_systems(&order);
         }
@@ -282,6 +371,7 @@ impl App {
         all_lines: &mut Option<(usize, bool)>,
         new_lines: &mut Option<(usize, Vec<usize>)>,
         started: &mut Option<Dnd>,
+        line_to_top: &mut Option<(usize, usize)>,
     ) {
         let Some(data) = self.transit.data(slot) else { return };
         let prefs = self.transit.prefs(slot).clone();
@@ -312,6 +402,12 @@ impl App {
                     if ui.checkbox(&mut on, name).changed() {
                         line_hidden.push((slot, li, !on));
                     }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let is_top = top_first.first() == Some(&li);
+                        if ui.add_enabled(!is_top, egui::Button::new("Top").small()).on_hover_text("Draw this line on top of the others in its system").clicked() {
+                            *line_to_top = Some((slot, li));
+                        }
+                    });
                 });
                 rows.push(r.response.rect);
             }

@@ -17,6 +17,7 @@ mod kml;
 mod layers;
 mod mesh;
 mod mvt;
+mod phonesync;
 mod plane;
 mod search;
 mod settings;
@@ -263,6 +264,9 @@ struct App {
     show_tracks: bool,
     layers_open: bool,
     tracks: tracks::TrackSet,
+    /// Receive tracks from the phone tracker over WiFi (off until you turn it on).
+    phone_sync_on: bool,
+    phone_sync: Option<phonesync::PhoneSync>,
     /// Camera as of the previous frame, to tell when the view is moving.
     prev_cam: [f64; 7],
     pacer: Pacer,
@@ -348,6 +352,8 @@ impl App {
             show_transit: true,
             show_tracks: true,
             layers_open: false,
+            phone_sync_on: false,
+            phone_sync: None,
             tiles,
             palette: Palette::STANDARD,
             fly: None,
@@ -409,6 +415,9 @@ impl App {
         };
         // Settings from the last run (kept in the user data folder, so they survive new builds).
         app.apply_settings(&settings::Store::load(), &cc.egui_ctx);
+        if app.phone_sync_on {
+            app.set_phone_sync(&cc.egui_ctx, true);
+        }
         app.saved_settings = app.settings_text();
         app
     }
@@ -613,6 +622,11 @@ impl eframe::App for App {
         }
         self.transit.poll();
         self.tracks.poll();
+        if let Some(s) = &self.phone_sync {
+            for f in s.take_saved() {
+                self.tracks.reload_file(&f);
+            }
+        }
         self.search.poll();
         // A .kml file dropped on the window becomes a GPS track.
         let dropped: Vec<std::path::PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());

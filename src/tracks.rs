@@ -104,11 +104,30 @@ impl TrackSet {
 
     /// Picks up tracks the worker has read; call once per frame.
     pub fn poll(&mut self) {
-        let new: Vec<Track> = std::mem::take(&mut *self.incoming.lock().unwrap());
+        let mut new: Vec<Track> = std::mem::take(&mut *self.incoming.lock().unwrap());
+        // a file the phone has just sent is already here in its newer form
+        let have: std::collections::HashSet<String> = self.items.iter().map(|i| i.track.file.clone()).collect();
+        new.retain(|t| !have.contains(&t.file));
         for mut t in new {
             t.color = COLORS[self.items.len() % COLORS.len()];
             self.items.push(Item { track: Arc::new(t), shown: true });
         }
+    }
+
+    /// Reads a file in the tracks folder again (the phone sent a newer copy); its tracks replace the
+    /// old ones in place, keeping their colour and whether they were shown.
+    pub fn reload_file(&mut self, file: &str) {
+        let fresh = read_file(&self.dir.join(file));
+        let at = self.items.iter().position(|i| i.track.file == file);
+        let keep = at.map(|k| (self.items[k].track.color, self.items[k].shown));
+        self.items.retain(|i| i.track.file != file);
+        let mut at = at.unwrap_or(self.items.len()).min(self.items.len());
+        for mut t in fresh {
+            t.color = keep.map_or(COLORS[self.items.len() % COLORS.len()], |k| k.0);
+            self.items.insert(at, Item { track: Arc::new(t), shown: keep.map_or(true, |k| k.1) });
+            at += 1;
+        }
+        self.message = format!("Updated {file}");
     }
 
     /// Copies a dropped `.kml` into the tracks folder and reads it.
@@ -228,4 +247,31 @@ pub fn draw(painter: &egui::Painter, rect: egui::Rect, cam: &Camera, zf: f64, it
         }
     }
     caption.map(|c| c.1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const KML: &str = "<kml><Placemark><name>Walk</name><LineString><coordinates>-122.30,37.90 -122.29,37.91 -122.28,37.92</coordinates></LineString></Placemark></kml>";
+
+    #[test]
+    fn a_newer_copy_of_a_file_replaces_the_old_one_in_place() {
+        let dir = std::env::temp_dir().join(format!("rmaps-tracks-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut set = TrackSet::new(&egui::Context::default(), &dir);
+        std::fs::write(set.dir().join("Phone_2026-11-28.kml"), KML).unwrap();
+        set.reload_file("Phone_2026-11-28.kml");
+        std::fs::write(set.dir().join("Other.kml"), KML).unwrap();
+        set.reload_file("Other.kml");
+        assert_eq!(set.items.len(), 2);
+        set.items[0].shown = false;
+        let color = set.items[0].track.color;
+        std::fs::write(set.dir().join("Phone_2026-11-28.kml"), KML.replace("Walk", "Longer walk")).unwrap();
+        set.reload_file("Phone_2026-11-28.kml");
+        assert_eq!(set.items.len(), 2, "replaced, not added");
+        assert_eq!(set.items[0].track.name, "Longer walk");
+        assert!(!set.items[0].shown && set.items[0].track.color == color, "keeps what the user chose");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
