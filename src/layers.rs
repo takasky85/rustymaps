@@ -195,7 +195,16 @@ impl App {
                                 ui.selectable_value(&mut self.track_view, v, name);
                             }
                         });
-                        ui.small("Cleaned up drops stray jumps and smooths the wobble. The original is never changed. Click a path on the map for time, distance and replay.");
+                        ui.small("Cleaned up drops stray jumps and smooths the wobble. Snapped to streets then pulls it onto the street network from the map tiles on your disk (parks and places with no street stay as they were). The original is never changed. Click a path on the map for time, distance and replay.");
+                        if self.track_view == tracks::View::Snapped {
+                            let line = self.tracks.snap_status();
+                            if !line.is_empty() {
+                                ui.small(line);
+                            }
+                            if self.tracks.snap_incomplete() && ui.small_button("Redo").on_hover_text("Snap again, now that the map tiles have been viewed").clicked() {
+                                self.tracks.resnap();
+                            }
+                        }
                         if self.tracks.items.is_empty() {
                             ui.small("No tracks yet. Drop a .kml file onto this window to add one.");
                         } else {

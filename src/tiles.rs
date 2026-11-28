@@ -82,6 +82,12 @@ impl DiskCache {
         std::fs::read(&p).ok()
     }
 
+    /// Like `get`, but also returns a tile that is past its refresh age (for work that only reads
+    /// map data and must not trigger downloads).
+    pub fn get_any(&self, id: TileId) -> Option<Vec<u8>> {
+        std::fs::read(self.path(id)).ok()
+    }
+
     pub fn put(&self, id: TileId, bytes: &[u8]) {
         let p = self.path(id);
         if let Some(dir) = p.parent() {

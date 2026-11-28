@@ -175,7 +175,15 @@ pub fn card(ctx: &egui::Context, items: &[Item], view: View, player: &mut Player
                 Timing::Estimated => "This file has no time for each point, so the speed shown is the average (worked out from the times in the track's name). Newer tracker versions record every point's time.",
                 Timing::None => "This file has no times, so the replay assumes a walking pace.",
             };
-            let which = if view.uses_clean() { "Cleaned-up path." } else { "Original path." };
+            let which = match view {
+                View::Original => "Original path.".to_string(),
+                View::Snapped => match t.snapped.get() {
+                    Some(sn) if sn.total > 0 => format!("Snapped to streets ({}% of points on a street).", sn.matched * 100 / sn.total),
+                    Some(_) => "Snapped to streets.".to_string(),
+                    None => "Snapping to streets...".to_string(),
+                },
+                _ => "Cleaned-up path.".to_string(),
+            };
             ui.small(format!("{which} {note}"));
         });
     });

@@ -23,6 +23,8 @@ mod phonesync;
 mod plane;
 mod replay;
 mod search;
+mod snap;
+mod snap_tiles;
 mod settings;
 mod sha256;
 mod style;
@@ -636,6 +638,9 @@ impl eframe::App for App {
         }
         self.transit.poll();
         self.tracks.poll();
+        if self.show_tracks && self.track_view == tracks::View::Snapped {
+            self.tracks.request_snap();
+        }
         if let Some(s) = &self.phone_sync {
             for f in s.take_saved() {
                 self.tracks.reload_file(&f);

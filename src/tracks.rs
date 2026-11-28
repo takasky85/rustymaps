@@ -3,7 +3,8 @@
 //! (or, later, the phone sending one) is all it takes.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use eframe::egui::{self, Color32, Pos2, Stroke};
 
@@ -11,6 +12,8 @@ use crate::camera::{vec_to_lonlat, Camera, V3};
 use crate::clean;
 use crate::kml;
 use crate::replay::Timeline;
+use crate::snap_tiles::{self, SnappedTrack};
+use crate::tiles::DiskCache;
 use crate::transit::circle_may_be_visible;
 
 /// Which version of the paths is drawn.
@@ -22,16 +25,19 @@ pub enum View {
     Cleaned,
     /// The original, thin and faint, under the tidied one.
     Both,
+    /// The tidied copy pulled onto the streets (see `snap`); the original is drawn faint beneath it.
+    Snapped,
 }
 
 impl View {
-    pub const ALL: [(View, &'static str); 3] = [(View::Original, "Original"), (View::Cleaned, "Cleaned up"), (View::Both, "Both")];
+    pub const ALL: [(View, &'static str); 4] = [(View::Original, "Original"), (View::Cleaned, "Cleaned up"), (View::Both, "Both"), (View::Snapped, "Snapped to streets")];
 
     pub fn key(self) -> &'static str {
         match self {
             View::Original => "original",
             View::Cleaned => "cleaned",
             View::Both => "both",
+            View::Snapped => "snapped",
         }
     }
 
@@ -90,6 +96,12 @@ pub struct Track {
     /// Clocks of the original and the tidied points.
     pub orig: Timeline,
     pub cleaned: Timeline,
+    /// The tidied points' times (one list per stretch, empty where the file had none).
+    pub clean_times: Vec<Vec<f64>>,
+    /// How long the track lasted, when only its name says.
+    pub span: Option<f64>,
+    /// Filled in by a background thread the first time the snapped view is wanted.
+    pub snapped: OnceLock<SnappedTrack>,
     pub center: V3,
     /// Angular radius (radians) around `center` that holds every point.
     pub radius: f64,
@@ -100,10 +112,19 @@ pub struct Track {
 impl Track {
     /// The clock of the version being shown.
     pub fn timeline(&self, view: View) -> &Timeline {
-        if view.uses_clean() {
-            &self.cleaned
-        } else {
-            &self.orig
+        match view {
+            View::Original => &self.orig,
+            View::Snapped => self.snapped.get().map_or(&self.cleaned, |s| &s.timeline),
+            _ => &self.cleaned,
+        }
+    }
+
+    /// The stretches that are drawn as the main line in `view`.
+    pub fn main_segs(&self, view: View) -> &[Vec<V3>] {
+        match view {
+            View::Original => &self.segs,
+            View::Snapped => self.snapped.get().map_or(&self.clean_segs[..], |s| &s.segs[..]),
+            _ => &self.clean_segs,
         }
     }
 
@@ -124,6 +145,9 @@ pub struct TrackSet {
     dir: PathBuf,
     pub items: Vec<Item>,
     incoming: Arc<Mutex<Vec<Track>>>,
+    cache: Arc<DiskCache>,
+    /// True while a background thread is snapping tracks.
+    snapping: Arc<AtomicBool>,
     /// A line about the last import, for the Layers panel.
     pub message: String,
 }
@@ -154,7 +178,7 @@ fn build(p: kml::Parsed, file: &str) -> Track {
     let span = kml::name_span_secs(&p.name);
     let orig = Timeline::new(&p.segs, &p.times, span);
     let cleaned = Timeline::new(&clean_segs, &clean_times, span);
-    Track { name: p.name, file: file.to_string(), segs: p.segs, clean_segs, orig, cleaned, center, radius, km, color: [0; 3] }
+    Track { name: p.name, file: file.to_string(), segs: p.segs, clean_segs, orig, cleaned, clean_times, span, snapped: OnceLock::new(), center, radius, km, color: [0; 3] }
 }
 
 /// Reads one KML file into tracks (empty when it holds none).
@@ -197,7 +221,7 @@ impl TrackSet {
         let dir = data_dir.join("tracks");
         let _ = std::fs::create_dir_all(&dir);
         adopt_old_files(&legacy_dir.join("tracks"), &dir);
-        let set = TrackSet { ctx: ctx.clone(), dir: dir.clone(), items: Vec::new(), incoming: Arc::new(Mutex::new(Vec::new())), message: String::new() };
+        let set = TrackSet { ctx: ctx.clone(), dir: dir.clone(), items: Vec::new(), incoming: Arc::new(Mutex::new(Vec::new())), cache: Arc::new(DiskCache::new()), snapping: Arc::new(AtomicBool::new(false)), message: String::new() };
         let incoming = set.incoming.clone();
         let ctx = ctx.clone();
         let _ = std::thread::Builder::new().name("tracks-load".into()).spawn(move || {
@@ -216,6 +240,67 @@ impl TrackSet {
 
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// Starts snapping the tracks that have not been (one background thread, one track at a time).
+    /// Call every frame while the snapped view is on; it does nothing when there is nothing to do.
+    pub fn request_snap(&self) {
+        let todo: Vec<Arc<Track>> = self.items.iter().filter(|i| i.track.snapped.get().is_none()).map(|i| i.track.clone()).collect();
+        if todo.is_empty() || self.snapping.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let (cache, flag, ctx) = (self.cache.clone(), self.snapping.clone(), self.ctx.clone());
+        let spawned = std::thread::Builder::new().name("tracks-snap".into()).spawn({
+            let flag = flag.clone();
+            move || {
+                for t in todo {
+                    let r = snap_tiles::snap_track(&t.clean_segs, &t.clean_times, t.span, &cache);
+                    let _ = t.snapped.set(r);
+                    ctx.request_repaint();
+                }
+                flag.store(false, Ordering::Release);
+            }
+        });
+        if spawned.is_err() {
+            flag.store(false, Ordering::Release);
+        }
+    }
+
+    /// A line for the Layers panel about the snapping: progress, and what could not be done.
+    pub fn snap_status(&self) -> String {
+        let waiting = self.items.iter().filter(|i| i.track.snapped.get().is_none()).count();
+        if waiting > 0 {
+            return format!("Snapping {waiting} track(s) to the streets...");
+        }
+        let (mut matched, mut total, mut missing) = (0, 0, 0);
+        for i in &self.items {
+            if let Some(s) = i.track.snapped.get() {
+                matched += s.matched;
+                total += s.total;
+                missing += s.missing_tiles;
+            }
+        }
+        if total == 0 {
+            return String::new();
+        }
+        let mut line = format!("{}% of the points are on a street.", matched * 100 / total);
+        if missing > 0 {
+            line.push_str(&format!(" {missing} map tile(s) were not on disk: look at those places on the map once, then press Redo."));
+        }
+        line
+    }
+
+    /// True when some track lacked map tiles when it was snapped.
+    pub fn snap_incomplete(&self) -> bool {
+        self.items.iter().any(|i| i.track.snapped.get().map_or(false, |s| s.missing_tiles > 0))
+    }
+
+    /// Snaps again the tracks that were short of map tiles (after the tiles have been viewed).
+    pub fn resnap(&mut self) {
+        let files: Vec<String> = self.items.iter().filter(|i| i.track.snapped.get().map_or(false, |s| s.missing_tiles > 0)).map(|i| i.track.file.clone()).collect();
+        for f in files {
+            self.reload_file(&f);
+        }
     }
 
     /// Picks up tracks the worker has read; call once per frame.
@@ -353,9 +438,9 @@ pub fn draw(painter: &egui::Painter, rect: egui::Rect, cam: &Camera, zf: f64, it
         }
         let col = Color32::from_rgb(t.color[0], t.color[1], t.color[2]);
         let is_sel = selected == Some(idx);
-        let main_segs = if view.uses_clean() { &t.clean_segs } else { &t.segs };
+        let main_segs = t.main_segs(view);
         let runs = screen_runs(&pr, rect, on_screen, main_segs);
-        let faint = if view == View::Both { screen_runs(&pr, rect, on_screen, &t.segs) } else { Vec::new() };
+        let faint = if matches!(view, View::Both | View::Snapped) { screen_runs(&pr, rect, on_screen, &t.segs) } else { Vec::new() };
         let mut probe: Vec<&Vec<Pos2>> = runs.iter().collect();
         // the original, thin and see-through, under the tidied one
         for r in &faint {
