@@ -23,6 +23,12 @@ const BETA_M: f64 = 8.0;
 /// Candidates kept per fix.
 const MAX_CANDIDATES: usize = 8;
 const CELL_M: f64 = 40.0;
+/// Extra cost of snapping to a street of each rank at full "prefer main streets" (the cost of a fix
+/// is 0.5 at the typical 15 m off, 2 at the 30 m limit). Rank 0 is a main street, 1 a side street,
+/// 2 a service road or alley, 3 a track, 4 a footpath.
+const RANK_COST: [f64; 5] = [0.0, 0.6, 4.0, 5.0, 6.0];
+/// From this preference up, only main and local streets are used: no alleys, service roads, tracks or footpaths.
+const ONLY_MAIN: f64 = 0.999;
 
 /// Metres east and north of a spot, for a small area.
 #[derive(Clone, Copy)]
@@ -62,6 +68,7 @@ struct Seg {
     a: usize,
     b: usize,
     len: f64,
+    rank: u8,
 }
 
 /// The street network around a track.
@@ -73,11 +80,12 @@ struct Roads {
 }
 
 impl Roads {
-    fn new(lines: &[Vec<[f64; 2]>]) -> Roads {
+    fn new(lines: &[Vec<[f64; 2]>], ranks: &[u8]) -> Roads {
         let mut r = Roads { nodes: Vec::new(), adj: Vec::new(), segs: Vec::new(), grid: HashMap::new() };
         let mut ids: HashMap<(i64, i64), usize> = HashMap::new();
         let mut seen: HashSet<(usize, usize)> = HashSet::new();
-        for line in lines {
+        for (li, line) in lines.iter().enumerate() {
+            let rank = ranks.get(li).copied().unwrap_or(0);
             let mut prev: Option<usize> = None;
             for &p in line {
                 // vertices closer than half a metre are one junction (also joins tile edges)
@@ -91,7 +99,7 @@ impl Roads {
                     if a != id && seen.insert((a.min(id), a.max(id))) {
                         let len = dist(r.nodes[a], r.nodes[id]);
                         let k = r.segs.len();
-                        r.segs.push(Seg { a, b: id, len });
+                        r.segs.push(Seg { a, b: id, len, rank });
                         r.adj[a].push((id, len));
                         r.adj[id].push((a, len));
                         let (pa, pb) = (r.nodes[a], r.nodes[id]);
@@ -113,8 +121,15 @@ impl Roads {
         r
     }
 
-    /// The nearest spot on each street within `radius` of `p`, nearest first.
-    fn candidates(&self, p: [f64; 2]) -> Vec<Cand> {
+    /// What it costs to believe a fix was on this spot: far away is dear, and so is a street of a
+    /// kind the walker is not expected to be on (`prefer` is 0 for no opinion, up to 1).
+    fn emission(&self, c: &Cand, prefer: f64) -> f64 {
+        let rank = (self.segs[c.seg].rank as usize).min(RANK_COST.len() - 1);
+        0.5 * (c.d / SIGMA_M).powi(2) + prefer * RANK_COST[rank]
+    }
+
+    /// The best spots on the streets within `RADIUS_M` of `p` (one per street), cheapest first.
+    fn candidates(&self, p: [f64; 2], prefer: f64) -> Vec<Cand> {
         let (x0, x1) = (((p[0] - RADIUS_M) / CELL_M).floor() as i32, ((p[0] + RADIUS_M) / CELL_M).floor() as i32);
         let (y0, y1) = (((p[1] - RADIUS_M) / CELL_M).floor() as i32, ((p[1] + RADIUS_M) / CELL_M).floor() as i32);
         let mut seen: HashSet<usize> = HashSet::new();
@@ -139,7 +154,7 @@ impl Roads {
                 }
             }
         }
-        out.sort_by(|x, y| x.d.partial_cmp(&y.d).unwrap_or(Ordering::Equal));
+        out.sort_by(|x, y| self.emission(x, prefer).partial_cmp(&self.emission(y, prefer)).unwrap_or(Ordering::Equal));
         out.truncate(MAX_CANDIDATES);
         out
     }
@@ -245,8 +260,17 @@ pub struct Snapped {
     pub total: usize,
 }
 
-/// Snaps one stretch of a track. `roads` are street polylines as points on the globe.
+/// Snaps one stretch of a track, treating every street alike.
 pub fn snap(points: &[V3], times: &[f64], roads: &[Vec<V3>]) -> Snapped {
+    snap_ranked(points, times, roads, &[], 0.0)
+}
+
+/// Snaps one stretch of a track. `roads` are street polylines as points on the globe and `ranks`
+/// says what kind each is (0 main street ... 4 footpath; missing means 0). `prefer` (0 to 1) is how
+/// strongly the main streets are preferred: at 0 the nearest street wins, in between footpaths and
+/// alleys cost extra, and at 1 they are left out altogether.
+pub fn snap_ranked(points: &[V3], times: &[f64], roads: &[Vec<V3>], ranks: &[u8], prefer: f64) -> Snapped {
+    let prefer = prefer.clamp(0.0, 1.0);
     let n = points.len();
     let unchanged = || Snapped { pts: points.to_vec(), times: times.to_vec(), matched: 0, total: n };
     if n < 2 || roads.is_empty() {
@@ -254,16 +278,24 @@ pub fn snap(points: &[V3], times: &[f64], roads: &[Vec<V3>]) -> Snapped {
     }
     let timed = times.len() == n;
     let plane = Plane::new(points[n / 2]);
-    let lines: Vec<Vec<[f64; 2]>> = roads.iter().map(|l| l.iter().map(|&p| plane.xy(p)).collect()).collect();
-    let net = Roads::new(&lines);
+    let (mut lines, mut kept): (Vec<Vec<[f64; 2]>>, Vec<u8>) = (Vec::new(), Vec::new());
+    for (i, l) in roads.iter().enumerate() {
+        let rank = ranks.get(i).copied().unwrap_or(0);
+        if prefer >= ONLY_MAIN && rank >= 2 {
+            continue;
+        }
+        lines.push(l.iter().map(|&p| plane.xy(p)).collect());
+        kept.push(rank);
+    }
+    let net = Roads::new(&lines, &kept);
     if net.segs.is_empty() {
         return unchanged();
     }
     let xy: Vec<[f64; 2]> = points.iter().map(|&p| plane.xy(p)).collect();
 
     // --- candidates, and the cheapest chain through them (Viterbi) ---------------------------
-    let cands: Vec<Vec<Cand>> = xy.iter().map(|&p| net.candidates(p)).collect();
-    let emis = |c: &Cand| 0.5 * (c.d / SIGMA_M).powi(2);
+    let cands: Vec<Vec<Cand>> = xy.iter().map(|&p| net.candidates(p, prefer)).collect();
+    let emis = |c: &Cand| net.emission(c, prefer);
     let mut cost: Vec<Vec<f64>> = vec![Vec::new(); n];
     let mut back: Vec<Vec<Option<usize>>> = vec![Vec::new(); n];
     // for the last fix of a finished chain, the candidate that ends it
@@ -525,13 +557,45 @@ mod tests {
     #[test]
     fn route_distance_goes_round_corners() {
         let lines: Vec<Vec<[f64; 2]>> = vec![vec![[0.0, 0.0], [100.0, 0.0], [100.0, 100.0]]];
-        let net = Roads::new(&lines);
-        let a = net.candidates([20.0, 3.0]);
-        let b = net.candidates([97.0, 70.0]);
+        let net = Roads::new(&lines, &[]);
+        let a = net.candidates([20.0, 3.0], 0.0);
+        let b = net.candidates([97.0, 70.0], 0.0);
         let (a, b) = (a[0], b[0]);
         let sp = net.spread(&a, 500.0);
         let (walk, path) = net.route(&a, &sp, &b).unwrap();
         assert!((walk - (80.0 + 70.0)).abs() < 1e-6, "{walk}");
         assert_eq!(path.len(), 1, "passes the corner junction");
+    }
+
+    /// A street along y = 0 (rank 0) and a footpath along y = 8, both running east.
+    fn street_and_footpath() -> (Vec<Vec<V3>>, Vec<u8>) {
+        (vec![vec![at(-50.0, 0.0), at(150.0, 0.0)], vec![at(-50.0, 8.0), at(150.0, 8.0)]], vec![0, 4])
+    }
+
+    #[test]
+    fn a_footpath_beside_the_street_is_preferred_only_when_nothing_is_asked() {
+        let (roads, ranks) = street_and_footpath();
+        // walking 6 m north of the street, so the footpath is the nearer one
+        let pts: Vec<V3> = (0..20).map(|i| at(i as f64 * 5.0, 6.0)).collect();
+        let plain = snap_ranked(&pts, &[], &roads, &ranks, 0.0);
+        assert!(plain.pts.iter().all(|p| off_line(*p, &roads[1]) < 1.0), "no preference: the nearest wins");
+        let some = snap_ranked(&pts, &[], &roads, &ranks, 0.5);
+        assert!(some.pts.iter().all(|p| off_line(*p, &roads[0]) < 1.0), "preferring main streets: the street wins");
+    }
+
+    #[test]
+    fn at_the_most_footpaths_are_not_used_and_a_walk_only_they_serve_stays_put() {
+        let (roads, ranks) = street_and_footpath();
+        // a walk along a footpath with no street within reach (y = 100)
+        let far = vec![vec![at(-50.0, 100.0), at(150.0, 100.0)]];
+        let pts: Vec<V3> = (0..20).map(|i| at(i as f64 * 5.0, 101.0)).collect();
+        assert_eq!(snap_ranked(&pts, &[], &far, &[4], 0.5).matched, pts.len(), "still snapped when only a path is near");
+        let s = snap_ranked(&pts, &[], &far, &[4], 1.0);
+        assert_eq!(s.matched, 0, "main streets only: nothing to snap to");
+        assert!(s.pts.iter().zip(&pts).all(|(a, b)| metres(*a, *b) < 1e-6));
+        // and next to the street, it still finds the street
+        let near: Vec<V3> = (0..20).map(|i| at(i as f64 * 5.0, 5.0)).collect();
+        let s = snap_ranked(&near, &[], &roads, &ranks, 1.0);
+        assert!(s.pts.iter().all(|p| off_line(*p, &roads[0]) < 1.0));
     }
 }

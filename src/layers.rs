@@ -201,6 +201,16 @@ impl App {
                             if !line.is_empty() {
                                 ui.small(line);
                             }
+                            let mut prefer = self.tracks.snap_prefer;
+                            let r = ui.add(
+                                egui::Slider::new(&mut prefer, 0.0..=1.0)
+                                    .text("Streets")
+                                    .custom_formatter(|v, _| if v <= 0.0 { "any path".to_string() } else if v >= 0.999 { "local + main only".to_string() } else { format!("{:.0}%", v * 100.0) }),
+                            )
+                            .on_hover_text("Local + main only (the default): snap to local streets and main roads; alleys, service roads, driveways and footpaths between buildings are not used, and a stretch with no street near stays as walked.\nIn between: those cost extra, so a street a little further away wins.\nAny path: snap to the nearest line of any kind.");
+                            if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                                self.tracks.set_snap_prefer(prefer);
+                            }
                             if self.tracks.snap_incomplete() && ui.small_button("Redo").on_hover_text("Snap again, now that the map tiles have been viewed").clicked() {
                                 self.tracks.resnap();
                             }

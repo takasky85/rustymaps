@@ -148,6 +148,8 @@ pub struct TrackSet {
     cache: Arc<DiskCache>,
     /// True while a background thread is snapping tracks.
     snapping: Arc<AtomicBool>,
+    /// How strongly snapping prefers main streets over alleys and footpaths (0 to 1).
+    pub snap_prefer: f32,
     /// A line about the last import, for the Layers panel.
     pub message: String,
 }
@@ -221,7 +223,7 @@ impl TrackSet {
         let dir = data_dir.join("tracks");
         let _ = std::fs::create_dir_all(&dir);
         adopt_old_files(&legacy_dir.join("tracks"), &dir);
-        let set = TrackSet { ctx: ctx.clone(), dir: dir.clone(), items: Vec::new(), incoming: Arc::new(Mutex::new(Vec::new())), cache: Arc::new(DiskCache::new()), snapping: Arc::new(AtomicBool::new(false)), message: String::new() };
+        let set = TrackSet { ctx: ctx.clone(), dir: dir.clone(), items: Vec::new(), incoming: Arc::new(Mutex::new(Vec::new())), cache: Arc::new(DiskCache::new()), snapping: Arc::new(AtomicBool::new(false)), snap_prefer: 1.0, message: String::new() };
         let incoming = set.incoming.clone();
         let ctx = ctx.clone();
         let _ = std::thread::Builder::new().name("tracks-load".into()).spawn(move || {
@@ -249,12 +251,12 @@ impl TrackSet {
         if todo.is_empty() || self.snapping.swap(true, Ordering::AcqRel) {
             return;
         }
-        let (cache, flag, ctx) = (self.cache.clone(), self.snapping.clone(), self.ctx.clone());
+        let (cache, flag, ctx, prefer) = (self.cache.clone(), self.snapping.clone(), self.ctx.clone(), self.snap_prefer as f64);
         let spawned = std::thread::Builder::new().name("tracks-snap".into()).spawn({
             let flag = flag.clone();
             move || {
                 for t in todo {
-                    let r = snap_tiles::snap_track(&t.clean_segs, &t.clean_times, t.span, &cache);
+                    let r = snap_tiles::snap_track(&t.clean_segs, &t.clean_times, t.span, prefer, &cache);
                     let _ = t.snapped.set(r);
                     ctx.request_repaint();
                 }
@@ -293,6 +295,20 @@ impl TrackSet {
     /// True when some track lacked map tiles when it was snapped.
     pub fn snap_incomplete(&self) -> bool {
         self.items.iter().any(|i| i.track.snapped.get().map_or(false, |s| s.missing_tiles > 0))
+    }
+
+    /// Changes how strongly main streets are preferred and snaps again the tracks that were done
+    /// with the old value (the others will use the new one when their turn comes).
+    pub fn set_snap_prefer(&mut self, v: f32) {
+        let v = v.clamp(0.0, 1.0);
+        if (v - self.snap_prefer).abs() < 1e-4 {
+            return;
+        }
+        self.snap_prefer = v;
+        let files: Vec<String> = self.items.iter().filter(|i| i.track.snapped.get().is_some()).map(|i| i.track.file.clone()).collect();
+        for f in files {
+            self.reload_file(&f);
+        }
     }
 
     /// Snaps again the tracks that were short of map tiles (after the tiles have been viewed).

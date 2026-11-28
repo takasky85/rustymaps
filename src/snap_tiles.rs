@@ -26,6 +26,19 @@ fn is_street(class: &str) -> bool {
     !matches!(class, "rail" | "transit" | "ferry" | "aerialway" | "")
 }
 
+/// What kind of street a feature is, from 0 (main street) to 4 (footpath); see `snap::snap_ranked`.
+fn street_rank(class: &str, subclass: &str) -> u8 {
+    match class {
+        "motorway" | "trunk" | "primary" | "secondary" | "tertiary" | "busway" => 0,
+        "minor" | "raceway" => 1,
+        "service" => 2,
+        "track" => 3,
+        // pedestrian streets and plazas are places people walk; other paths are the narrow kind
+        "path" if subclass == "pedestrian" => 1,
+        _ => 4,
+    }
+}
+
 fn tile_xy(lon: f64, lat: f64) -> (f64, f64) {
     let n = (1u64 << MAX_TILE_ZOOM) as f64;
     let x = (lon + std::f64::consts::PI) / (2.0 * std::f64::consts::PI) * n;
@@ -33,8 +46,8 @@ fn tile_xy(lon: f64, lat: f64) -> (f64, f64) {
     (x, y)
 }
 
-/// Street polylines (as points on the globe) from one tile's bytes.
-fn streets_in_tile(id: TileId, bytes: &[u8]) -> Vec<Vec<V3>> {
+/// Street polylines (as points on the globe) with their rank, from one tile's bytes.
+fn streets_in_tile(id: TileId, bytes: &[u8]) -> Vec<(Vec<V3>, u8)> {
     let mut out = Vec::new();
     let Ok(layers) = mvt::decode_tile(bytes) else { return out };
     let n = (1u64 << id.z) as f64;
@@ -44,6 +57,7 @@ fn streets_in_tile(id: TileId, bytes: &[u8]) -> Vec<Vec<V3>> {
             if f.geom_type != 2 || !is_street(layer.str_prop(f, "class").unwrap_or("")) {
                 continue;
             }
+            let rank = street_rank(layer.str_prop(f, "class").unwrap_or(""), layer.str_prop(f, "subclass").unwrap_or(""));
             for path in f.paths() {
                 let line: Vec<V3> = path
                     .iter()
@@ -56,7 +70,7 @@ fn streets_in_tile(id: TileId, bytes: &[u8]) -> Vec<Vec<V3>> {
                     })
                     .collect();
                 if line.len() >= 2 {
-                    out.push(line);
+                    out.push((line, rank));
                 }
             }
         }
@@ -65,7 +79,7 @@ fn streets_in_tile(id: TileId, bytes: &[u8]) -> Vec<Vec<V3>> {
 }
 
 /// The streets near `points` from the tiles on disk, and how many of the tiles needed are missing.
-fn streets_near(points: &[V3], cache: &DiskCache) -> (Vec<Vec<V3>>, usize) {
+fn streets_near(points: &[V3], cache: &DiskCache) -> (Vec<(Vec<V3>, u8)>, usize) {
     let (mut lo_x, mut hi_x, mut lo_y, mut hi_y) = (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
     for &p in points {
         let (lon, lat) = vec_to_lonlat(p);
@@ -100,16 +114,18 @@ fn streets_near(points: &[V3], cache: &DiskCache) -> (Vec<Vec<V3>>, usize) {
     (lines, missing)
 }
 
-/// Snaps the tidied stretches of a track. `clean_times` is empty or one list per stretch.
-pub fn snap_track(clean_segs: &[Vec<V3>], clean_times: &[Vec<f64>], span: Option<f64>, cache: &DiskCache) -> SnappedTrack {
+/// Snaps the tidied stretches of a track. `clean_times` is empty or one list per stretch; `prefer`
+/// (0 to 1) is how strongly main streets are preferred over alleys and footpaths.
+pub fn snap_track(clean_segs: &[Vec<V3>], clean_times: &[Vec<f64>], span: Option<f64>, prefer: f64, cache: &DiskCache) -> SnappedTrack {
     let all: Vec<V3> = clean_segs.iter().flatten().copied().collect();
-    let (roads, missing_tiles) = streets_near(&all, cache);
+    let (found, missing_tiles) = streets_near(&all, cache);
+    let (roads, ranks): (Vec<Vec<V3>>, Vec<u8>) = found.into_iter().unzip();
     let mut segs = Vec::new();
     let mut times = Vec::new();
     let (mut matched, mut total) = (0, 0);
     for (i, s) in clean_segs.iter().enumerate() {
         let t: &[f64] = clean_times.get(i).map_or(&[], |t| &t[..]);
-        let r = snap::snap(s, t, &roads);
+        let r = snap::snap_ranked(s, t, &roads, &ranks, prefer);
         matched += r.matched;
         total += r.total;
         segs.push(r.pts);
@@ -131,6 +147,7 @@ mod tests {
             vec![
                 Feat { geom: Geom::Line(vec![(0, 2048), (4096, 2048)]), props: vec![("class", Val::S("minor"))] },
                 Feat { geom: Geom::Line(vec![(0, 100), (4096, 100)]), props: vec![("class", Val::S("rail"))] },
+                Feat { geom: Geom::Line(vec![(0, 3000), (4096, 3000)]), props: vec![("class", Val::S("path")), ("subclass", Val::S("footway"))] },
             ],
         )
     }
@@ -139,7 +156,9 @@ mod tests {
     fn streets_come_from_a_tile_and_rails_are_left_out() {
         let id = TileId { z: 14, x: 2621, y: 6333 };
         let lines = streets_in_tile(id, &tile_with_street());
-        assert_eq!(lines.len(), 1, "the railway is not a street");
+        assert_eq!(lines.len(), 2, "the railway is not a street, the footpath and the street are");
+        assert_eq!(lines.iter().map(|l| l.1).collect::<Vec<_>>(), vec![1, 4], "a minor street, and a footpath");
+        let lines: Vec<Vec<V3>> = lines.into_iter().map(|l| l.0).collect();
         let (lon0, lat0) = vec_to_lonlat(lines[0][0]);
         let (lon1, lat1) = vec_to_lonlat(lines[0][1]);
         assert!((lat0 - lat1).abs() < 1e-9 && lon1 > lon0, "runs east");
