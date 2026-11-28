@@ -82,6 +82,12 @@ impl App {
         s.set("cache_mb", crate::tiles::cache_cap_mb());
         s.set("ui_size", self.ui_size);
         s.set("bilingual", self.bilingual);
+        s.set("show_transit", self.show_transit);
+        s.set("show_tracks", self.show_tracks);
+        s.set("system_order", self.transit.order_ids().join(","));
+        for (id, text) in self.transit.lines_settings() {
+            s.set(&format!("lines_{id}"), text);
+        }
         s.set("favorites", self.favorites.join(","));
         for p in &self.planes {
             s.set(&format!("plane_{}", p.def.model), p.show);
@@ -111,6 +117,17 @@ impl App {
         take!(self.flat_stations, "flat_stations");
         take!(self.show_trains, "trains");
         take!(self.bilingual, "bilingual");
+        take!(self.show_transit, "show_transit");
+        take!(self.show_tracks, "show_tracks");
+        if let Some(v) = s.get::<String>("system_order") {
+            let ids: Vec<&str> = v.split(',').map(str::trim).filter(|x| !x.is_empty()).collect();
+            self.transit.set_order_ids(&ids);
+        }
+        for c in crate::transit_data::SYSTEMS.iter() {
+            if let Some(v) = s.get::<String>(&format!("lines_{}", c.id)) {
+                self.transit.load_lines_setting(c.id, &v);
+            }
+        }
         if let Some(v) = s.get::<String>("favorites") {
             self.favorites = v.split(',').map(str::trim).filter(|x| !x.is_empty()).map(String::from).collect();
         }

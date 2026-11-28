@@ -13,6 +13,8 @@ mod fonts;
 mod globe;
 mod gpu;
 mod json;
+mod kml;
+mod layers;
 mod mesh;
 mod mvt;
 mod plane;
@@ -21,6 +23,7 @@ mod settings;
 mod style;
 mod tile_id;
 mod tiles;
+mod tracks;
 mod transit;
 mod transit_data;
 mod ui;
@@ -251,6 +254,15 @@ struct App {
     places_filter: String,
     /// The "transit here" list in the upper right is folded away.
     systems_folded: bool,
+    /// Systems whose lines are listed (opened like folders) in that list.
+    systems_open: std::collections::HashSet<usize>,
+    /// A row of that list is being dragged.
+    dnd: Option<layers::Dnd>,
+    /// Layers: the whole transit map, and the GPS paths, can be switched off.
+    show_transit: bool,
+    show_tracks: bool,
+    layers_open: bool,
+    tracks: tracks::TrackSet,
     /// Camera as of the previous frame, to tell when the view is moving.
     prev_cam: [f64; 7],
     pacer: Pacer,
@@ -326,9 +338,16 @@ impl App {
             }
         }
 
+        let tracks = tracks::TrackSet::new(&cc.egui_ctx, &data_dir);
         let mut app = App {
             cam: Camera::from_degrees(-115.0, 32.0, 2.2),
             transit,
+            tracks,
+            systems_open: Default::default(),
+            dnd: None,
+            show_transit: true,
+            show_tracks: true,
+            layers_open: false,
             tiles,
             palette: Palette::STANDARD,
             fly: None,
@@ -464,59 +483,7 @@ impl App {
         self.cam.normalize();
     }
 
-    /// The compass rose (bottom right): points to north, click to put north back up.
     /// The small globe in the bottom-right corner (click it to put the map north-up and flat).
-    /// A small list in the upper right, shown while the view is zoomed into a place served by more
-    /// than one transit system: switch each on or off and choose which is drawn on top.
-    fn systems_popup(&mut self, ctx: &egui::Context, rect: egui::Rect, zf: f64) {
-        if zf < transit::MAP_FULL {
-            return;
-        }
-        let near = self.transit.nearby(&self.cam, (rect.width() / rect.height().max(1.0)) as f64);
-        if near.len() < 2 {
-            return;
-        }
-        let mut toggle: Option<(usize, bool)> = None;
-        let mut shift: Option<(usize, bool)> = None;
-        egui::Area::new(egui::Id::new("systems_here")).anchor(egui::Align2::RIGHT_TOP, egui::vec2(-10.0, 64.0)).show(ctx, |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.set_max_width(270.0);
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(format!("Transit here ({})", near.len())).strong());
-                    if ui.small_button(if self.systems_folded { "▸" } else { "▾" }).on_hover_text("Fold or unfold").clicked() {
-                        self.systems_folded = !self.systems_folded;
-                    }
-                });
-                if self.systems_folded {
-                    return;
-                }
-                for (n, &slot) in near.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        let mut on = self.transit.enabled(slot);
-                        if ui.checkbox(&mut on, self.transit.title(slot)).changed() {
-                            toggle = Some((slot, on));
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.add_enabled(n + 1 < near.len(), egui::Button::new("▼").small()).on_hover_text("Draw under the next one").clicked() {
-                                shift = Some((slot, false));
-                            }
-                            if ui.add_enabled(n > 0, egui::Button::new("▲").small()).on_hover_text("Draw over the one above").clicked() {
-                                shift = Some((slot, true));
-                            }
-                        });
-                    });
-                }
-                ui.small("Top of the list is drawn on top.");
-            });
-        });
-        if let Some((slot, on)) = toggle {
-            self.transit.set_enabled(slot, on);
-        }
-        if let Some((slot, up)) = shift {
-            self.transit.shift_priority(slot, up, &near);
-        }
-    }
-
     fn compass(&mut self, ctx: &egui::Context, now: f64) {
         let tilt = self.cam.pitch.to_degrees();
         let (lon, lat, heading) = (self.cam.lon, self.cam.lat, self.cam.heading);
@@ -645,7 +612,15 @@ impl eframe::App for App {
             }
         }
         self.transit.poll();
+        self.tracks.poll();
         self.search.poll();
+        // A .kml file dropped on the window becomes a GPS track.
+        let dropped: Vec<std::path::PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
+        for path in dropped {
+            self.tracks.import(&path);
+            self.layers_open = true;
+            self.show_tracks = true;
+        }
 
         let speed = SPEEDS[self.speed].1;
         // Flights advance by the real time since the previous frame, however far apart frames are.
@@ -677,11 +652,12 @@ impl eframe::App for App {
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.sign = None;
-            if ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)) && self.tab.is_none() && self.selected_line.is_none() {
+            if ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)) && self.tab.is_none() && self.selected_line.is_none() && !self.layers_open {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
             }
             self.selected_line = None;
             self.tab = None;
+            self.layers_open = false;
             self.search_open = false;
         }
         if ctx.input(|i| i.key_pressed(egui::Key::R)) && !ctx.wants_keyboard_input() {
@@ -790,7 +766,9 @@ impl eframe::App for App {
                 at_altitude: self.route_at_altitude,
                 exaggeration: self.exaggeration,
             };
-            let systems = self.transit.visible();
+            // Layers: with the transit map switched off nothing of it is drawn or clickable.
+            let systems = if self.show_transit { self.transit.visible() } else { Vec::new() };
+            let line_prefs = if self.show_transit { self.transit.visible_prefs() } else { Vec::new() };
             // With a transit map in view the base map steps back: dimmed, and its labels hidden.
             let focus = if self.transit_focus { transit::focus(&self.cam, zf, w / h, &systems) } else { 0.0 };
             if focus > 0.01 && self.map_dim > 0.0 {
@@ -800,7 +778,7 @@ impl eframe::App for App {
             draw_routes(&painter, rect, &pr, &self.planes, &rs, &mut extras);
             // A click may hit a metro symbol (fly to that city) or a subway line (highlight it).
             let click = if resp.clicked() { resp.interact_pointer_pos() } else { None };
-            let markers = self.transit.markers();
+            let markers = if self.show_transit { self.transit.markers() } else { Vec::new() };
             let marker_click = click.and_then(|p| transit::marker_at(&self.cam, rect, zf, &markers, p));
             if let Some(p) = resp.hover_pos() {
                 if transit::marker_at(&self.cam, rect, zf, &markers, p).is_some() {
@@ -816,9 +794,20 @@ impl eframe::App for App {
                     pick: if marker_click.is_none() { click } else { None },
                     selected: self.selected_line.as_ref().map(|(a, i)| (a, *i)),
                     bilingual: self.bilingual,
+                    prefs: &line_prefs,
                 };
                 transit::draw(&painter, rect, &self.cam, zf, &systems, &opts)
             };
+            // GPS paths from the phone tracker, over the transit lines and under the names.
+            if self.show_tracks {
+                if let Some(text) = tracks::draw(&painter, rect, &self.cam, zf, &self.tracks.items, resp.hover_pos()) {
+                    let galley = painter.layout_no_wrap(text, egui::FontId::proportional(14.0), egui::Color32::WHITE);
+                    let at = resp.hover_pos().unwrap_or(rect.center()) + egui::vec2(14.0, 16.0);
+                    let r = egui::Rect::from_min_size(at, galley.size()).expand2(egui::vec2(8.0, 4.0));
+                    painter.rect_filled(r, 6.0, egui::Color32::from_black_alpha(200));
+                    painter.galley(r.min + egui::vec2(8.0, 4.0), galley, egui::Color32::WHITE);
+                }
+            }
             if out.animating {
                 // Redraw about once per pixel the fastest train crosses (slow real-time trains need very few frames).
                 let px_s = (out.motion_px_s as f64).max(1e-3);

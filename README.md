@@ -19,6 +19,9 @@ Rust + [egui](https://github.com/emilk/egui) + [wgpu](https://wgpu.rs). Map data
 | **Go to** menu | Fly to any city. Long trips zoom out towards a globe view and zoom back in near the city |
 | **Globe** button | Fly back out to the globe |
 | **F11** | Full screen on/off (also under *Map*) |
+| **Layers** button (stacked diamonds, next to the tabs) | Switch the whole transit map, the moving trains and the GPS paths on or off |
+| **Transit here** list (upper right, zoomed into a city) | Drag the grip to draw one system over another; open a system like a folder to hide lines or drag them to change which is on top (say, the Yamanote Line over everything). Remembered between runs |
+| Drop a `.kml` file on the window | Adds a GPS track (kept in `data/tracks/`); hover a track for its name and length |
 | Hover or click a station circle | A platform-style sign: the name (local script and English), its reading in kana where mapped, the neighbouring stations, the line colour. Click again to cycle through the lines that serve it |
 | **Clear cache** button | Delete the on-disk tile cache |
 

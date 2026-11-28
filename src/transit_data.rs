@@ -1358,6 +1358,78 @@ pub fn parse(cfg: &SystemConfig, text: &str) -> Result<SystemData, String> {
     Ok(data)
 }
 
+/// How the lines of one system are drawn: their order (bottom to top) and which are switched off.
+#[derive(Clone, Default, PartialEq, Debug)]
+pub struct LinePrefs {
+    /// Line indices, the bottom of the drawing order first (the last is drawn on top).
+    pub order: Vec<usize>,
+    pub hidden: Vec<bool>,
+}
+
+fn esc(s: &str) -> String {
+    s.replace('%', "%25").replace(',', "%2C").replace('\n', "%0A").replace('\r', "%0D")
+}
+
+fn unesc(s: &str) -> String {
+    s.replace("%2C", ",").replace("%0A", "\n").replace("%0D", "\r").replace("%25", "%")
+}
+
+impl LinePrefs {
+    pub fn new(n: usize) -> LinePrefs {
+        LinePrefs { order: (0..n).collect(), hidden: vec![false; n] }
+    }
+
+    pub fn is_hidden(&self, li: usize) -> bool {
+        self.hidden.get(li).copied().unwrap_or(false)
+    }
+
+    /// Drawing rank of every line of an `n`-line system (higher = drawn on top).
+    pub fn ranks(&self, n: usize) -> Vec<usize> {
+        let mut r: Vec<usize> = (0..n).collect();
+        for (k, &li) in self.order.iter().enumerate() {
+            if li < n {
+                r[li] = k;
+            }
+        }
+        r
+    }
+
+    pub fn is_default(&self) -> bool {
+        self.hidden.iter().all(|h| !h) && self.order.iter().enumerate().all(|(k, &li)| k == li)
+    }
+
+    /// One text line for the settings file: bottom to top, `v` (shown) or `h` (hidden) then the name.
+    pub fn encode(&self, lines: &[TLine]) -> String {
+        self.order
+            .iter()
+            .filter(|&&li| li < lines.len())
+            .map(|&li| format!("{}{}", if self.is_hidden(li) { 'h' } else { 'v' }, esc(&lines[li].name)))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    /// Reads `encode`'s text for a system's current lines. Lines it does not mention (new since it
+    /// was saved) go to the bottom, shown.
+    pub fn decode(text: &str, lines: &[TLine]) -> LinePrefs {
+        let n = lines.len();
+        let mut used = vec![false; n];
+        let mut hidden = vec![false; n];
+        let mut order: Vec<usize> = Vec::new();
+        for entry in text.split(',').filter(|e| !e.is_empty()) {
+            let (flag, name) = entry.split_at(1);
+            let name = unesc(name);
+            if let Some(i) = (0..n).find(|&i| !used[i] && lines[i].name == name) {
+                used[i] = true;
+                hidden[i] = flag == "h";
+                order.push(i);
+            }
+        }
+        let mut full: Vec<usize> = (0..n).filter(|&i| !used[i]).collect();
+        full.extend(order);
+        LinePrefs { order: full, hidden }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1600,4 +1672,28 @@ mod tests {
         assert!(dot(a, mid) < 1.0 && dot(mid, b) < 1.0);
         assert!(d.radius > 0.0, "a freshly parsed system must be ready to draw");
     }
+    #[test]
+    fn line_prefs_round_trip_and_survive_changed_lines() {
+        let mk = |n: &str| TLine { name: n.into(), local: String::new(), badge: String::new(), color: [0; 3], paths: vec![], track: Track::default() };
+        let lines = vec![mk("Yamanote"), mk("Chuo, Rapid"), mk("Keihin-Tohoku"), mk("Chuo, Rapid")];
+        let mut p = LinePrefs::new(4);
+        assert!(p.is_default());
+        p.order = vec![1, 0, 3, 2];
+        p.hidden[3] = true;
+        let text = p.encode(&lines);
+        assert!(!text.contains('\n'));
+        let back = LinePrefs::decode(&text, &lines);
+        assert_eq!(back, p, "{text}");
+        // a line that was added since goes to the bottom; a line that went away is ignored
+        let newer = vec![mk("Yamanote"), mk("Brand New"), mk("Chuo, Rapid"), mk("Chuo, Rapid")];
+        let b2 = LinePrefs::decode(&text, &newer);
+        assert_eq!(b2.order.len(), 4);
+        assert_eq!(b2.order[0], 1, "new line at the bottom");
+        assert_eq!(b2.order, vec![1, 2, 0, 3], "kept order of the lines that are still there");
+        assert!(b2.hidden[3] && b2.hidden.iter().filter(|h| **h).count() == 1);
+        let ranks = p.ranks(4);
+        assert_eq!(ranks[2], 3);
+        assert_eq!(ranks[1], 0);
+    }
+
 }

@@ -82,6 +82,7 @@ impl App {
         let avail_h = (rect.height() - (14.0 + 34.0 * k) - 28.0).max(240.0);
 
         // ---- the bar ----
+        let mut layers_at: Option<egui::Rect> = None;
         egui::Area::new(egui::Id::new("bar")).anchor(egui::Align2::LEFT_TOP, egui::vec2(8.0, 8.0)).order(egui::Order::Foreground).show(ctx, |ui| {
             frame(ctx).show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -90,8 +91,17 @@ impl App {
                         if ui.selectable_label(on, name).clicked() {
                             self.tab = if on { None } else { Some(tab) };
                             self.search_open = false;
+                            self.layers_open = false;
                         }
                     }
+                    let lb = crate::layers::layers_icon(ui, egui::vec2(30.0 * k, 24.0 * k), self.layers_open)
+                        .on_hover_text("Layers: show or hide the transit map and GPS paths");
+                    if lb.clicked() {
+                        self.layers_open = !self.layers_open;
+                        self.tab = None;
+                        self.search_open = false;
+                    }
+                    layers_at = Some(lb.rect);
                     ui.separator();
                     let resp = ui.add(egui::TextEdit::singleline(&mut self.search_text).hint_text("Search a place or station…").desired_width(220.0 * k));
                     let go = ui.button("Search").clicked();
@@ -116,6 +126,10 @@ impl App {
                 });
             });
         });
+
+        if let Some(b) = layers_at {
+            self.layers_popup(ctx, b.left_bottom() + egui::vec2(0.0, 8.0), b, now);
+        }
 
         // ---- the panel under it ----
         let pos = egui::vec2(8.0, 14.0 + 34.0 * k);

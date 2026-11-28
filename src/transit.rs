@@ -16,7 +16,7 @@ use eframe::egui::{self, Align2, Color32, FontId, Pos2, Stroke};
 
 use crate::camera::{add, cross, dot, lonlat_to_vec, normalize, scale, Camera, Projector, FOV_Y, V3};
 use crate::tiles::USER_AGENT;
-use crate::transit_data::{self, SystemData, SYSTEMS};
+use crate::transit_data::{self, LinePrefs, SystemData, SYSTEMS};
 
 #[derive(Clone, PartialEq)]
 pub enum Status {
@@ -29,6 +29,10 @@ pub enum Status {
 type Pending = Arc<Mutex<Option<Result<SystemData, String>>>>;
 
 struct Slot {
+    /// How its lines are drawn (set when the map has loaded).
+    prefs: LinePrefs,
+    /// Saved line settings waiting for the map to load.
+    saved: Option<String>,
     enabled: bool,
     status: Status,
     data: Option<Arc<SystemData>>,
@@ -54,6 +58,8 @@ impl TransitManager {
         let slots: Vec<Slot> = SYSTEMS
             .iter()
             .map(|c| Slot {
+                prefs: LinePrefs::default(),
+                saved: None,
                 enabled: false,
                 status: Status::Off,
                 data: None,
@@ -104,6 +110,10 @@ impl TransitManager {
             let done = slot.pending.lock().unwrap().take();
             match done {
                 Some(Ok(d)) => {
+                    slot.prefs = match slot.saved.take() {
+                        Some(t) => LinePrefs::decode(&t, &d.lines),
+                        None => LinePrefs::new(d.lines.len()),
+                    };
                     slot.data = Some(Arc::new(d));
                     slot.status = Status::Ready;
                     slot.offline = tmap_path(&self.dir, SYSTEMS[i].id).is_file();
@@ -187,6 +197,86 @@ impl TransitManager {
 
     pub fn title(&self, slot: usize) -> &'static str {
         SYSTEMS[slot].title
+    }
+
+    pub fn data(&self, slot: usize) -> Option<Arc<SystemData>> {
+        self.slots[slot].data.clone()
+    }
+
+    pub fn prefs(&self, slot: usize) -> &LinePrefs {
+        &self.slots[slot].prefs
+    }
+
+    /// Line settings of all enabled, loaded systems, in the same order as `visible`.
+    pub fn visible_prefs(&self) -> Vec<LinePrefs> {
+        self.visible_slots().into_iter().map(|i| self.slots[i].prefs.clone()).collect()
+    }
+
+    pub fn set_line_hidden(&mut self, slot: usize, line: usize, hidden: bool) {
+        if let Some(h) = self.slots[slot].prefs.hidden.get_mut(line) {
+            *h = hidden;
+        }
+    }
+
+    /// Sets the drawing order of one system's lines from a list with the top one first.
+    pub fn reorder_lines(&mut self, slot: usize, top_first: &[usize]) {
+        let p = &mut self.slots[slot].prefs;
+        let mut sorted = top_first.to_vec();
+        sorted.sort_unstable();
+        let mut have = p.order.clone();
+        have.sort_unstable();
+        if sorted == have {
+            p.order = top_first.iter().rev().copied().collect();
+        }
+    }
+
+    /// Sets the drawing order of the systems in `top_first` (which must be some of the systems, each
+    /// once); systems not in the list keep their places.
+    pub fn reorder_systems(&mut self, top_first: &[usize]) {
+        let places: Vec<usize> = (0..self.order.len()).filter(|&k| top_first.contains(&self.order[k])).collect();
+        if places.len() != top_first.len() {
+            return;
+        }
+        let new: Vec<usize> = top_first.iter().rev().copied().collect();
+        for (k, slot) in places.into_iter().zip(new) {
+            self.order[k] = slot;
+        }
+    }
+
+    /// System ids, bottom of the drawing order first (for the settings file).
+    pub fn order_ids(&self) -> Vec<&'static str> {
+        self.order.iter().map(|&i| SYSTEMS[i].id).collect()
+    }
+
+    /// Restores a saved order: systems not named keep their relative order below the named ones.
+    pub fn set_order_ids(&mut self, ids: &[&str]) {
+        let named: Vec<usize> = ids.iter().filter_map(|id| SYSTEMS.iter().position(|c| c.id == *id)).collect();
+        let mut order: Vec<usize> = self.order.iter().copied().filter(|i| !named.contains(i)).collect();
+        for i in named {
+            if !order.contains(&i) {
+                order.push(i);
+            }
+        }
+        self.order = order;
+    }
+
+    /// Saved line settings, (system id, text), for every system that has some.
+    pub fn lines_settings(&self) -> Vec<(&'static str, String)> {
+        let mut out = Vec::new();
+        for (s, c) in self.slots.iter().zip(SYSTEMS) {
+            match (&s.data, &s.saved) {
+                (Some(d), _) if !s.prefs.is_default() => out.push((c.id, s.prefs.encode(&d.lines))),
+                (None, Some(t)) => out.push((c.id, t.clone())),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    pub fn load_lines_setting(&mut self, id: &str, text: &str) {
+        if let Some(i) = SYSTEMS.iter().position(|c| c.id == id) {
+            self.slots[i].saved = Some(text.to_string());
+        }
     }
 }
 
@@ -528,11 +618,16 @@ fn may_be_visible(cam: &Camera, sys: &SystemData, aspect: f64) -> bool {
     if sys.radius <= 0.0 {
         return false;
     }
+    circle_may_be_visible(cam, sys.center, sys.radius, aspect)
+}
+
+/// Could any of the area within `radius` radians of `center` be on screen?
+pub fn circle_may_be_visible(cam: &Camera, center: V3, radius: f64, aspect: f64) -> bool {
     let cp = cam.pos();
     let d = dot(cp, cp).sqrt();
     let horizon = (1.0 / d).clamp(-1.0, 1.0).acos();
     let nadir = normalize(cp);
-    if dot(sys.center, nadir).clamp(-1.0, 1.0).acos() - sys.radius > horizon {
+    if dot(center, nadir).clamp(-1.0, 1.0).acos() - radius > horizon {
         return false;
     }
     if cam.alt < 0.2 {
@@ -540,7 +635,7 @@ fn may_be_visible(cam: &Camera, sys: &SystemData, aspect: f64) -> bool {
         let a = cam.pitch + half_diag;
         if a < 1.2 {
             let reach = cam.alt * (cam.pitch.cos() * a.tan() + cam.pitch.sin()) * 1.3 + 1e-4;
-            if dot(sys.center, cam.dir()).clamp(-1.0, 1.0).acos() - sys.radius > reach {
+            if dot(center, cam.dir()).clamp(-1.0, 1.0).acos() - radius > reach {
                 return false;
             }
         }
@@ -628,6 +723,8 @@ pub struct Opts<'a> {
     pub selected: Option<(&'a Arc<SystemData>, usize)>,
     /// Show local names with English underneath where a station has both.
     pub bilingual: bool,
+    /// Line order and visibility of each system in `systems` (same order).
+    pub prefs: &'a [LinePrefs],
 }
 
 pub struct Out {
@@ -701,9 +798,14 @@ pub fn draw(
             continue;
         }
         let sel = o.selected.and_then(|(a, i)| Arc::ptr_eq(a, sys).then_some(i));
-        // 1. Project every path into on-screen runs.
+        let pf = o.prefs.get(si);
+        let hidden = |li: usize| pf.map_or(false, |p| p.is_hidden(li));
+        // 1. Project every path into on-screen runs (lines switched off are skipped).
         let mut runs: Vec<(usize, Vec<Pos2>)> = Vec::new();
         for (li, line) in sys.lines.iter().enumerate() {
+            if hidden(li) {
+                continue;
+            }
             for path in &line.paths {
                 let mut run: Vec<Pos2> = Vec::new();
                 for &p in path {
@@ -736,6 +838,11 @@ pub fn draw(
             }
             egui::Rect::from_min_max(lo, hi).intersects(on_screen)
         });
+        // Lines the user moved up are drawn later, so they end up on top.
+        if let Some(p) = pf {
+            let rank = p.ranks(sys.lines.len());
+            runs.sort_by_key(|(li, _)| rank[*li]);
+        }
 
         // Which line was clicked?
         if let Some(pick) = o.pick {
@@ -769,7 +876,7 @@ pub fn draw(
         if zf >= ROUNDELS_FROM {
             let rr = lerp(zf, &[(10.5, 8.0), (12.0, 10.5), (16.0, 13.0)]);
             for (li, line) in sys.lines.iter().enumerate() {
-                if line.badge.is_empty() {
+                if line.badge.is_empty() || hidden(li) {
                     continue;
                 }
                 let Some(longest) = line.paths.iter().max_by_key(|p| p.len()) else { continue };
@@ -790,7 +897,7 @@ pub fn draw(
         // Trains (drawn after the station circles, below).
         if o.trains && train_a > 0.02 {
             for (li, line) in sys.lines.iter().enumerate() {
-                if sel.map_or(false, |s| s != li) {
+                if hidden(li) || sel.map_or(false, |s| s != li) {
                     continue;
                 }
                 let len = line.track.length();
@@ -814,6 +921,9 @@ pub fn draw(
 
         if zf >= STATIONS_FROM {
             for (sti, st) in sys.stations.iter().enumerate() {
+                if !st.lines.is_empty() && st.lines.iter().all(|&l| hidden(l)) {
+                    continue;
+                }
                 if let Some(s) = to_screen(st.pos) {
                     if on_screen.contains(s) {
                         stations.push((s, st, si, sti));
