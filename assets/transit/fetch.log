@@ -1,7 +1,290 @@
+tokyometro: saved in the old format, fetching again
+tokyometro: attempt 1
+tokyometro: ok, 15 lines, 280 stations, 21436 points, 2 MB downloaded
+    Tokyo Metro Yūrakuchō Line (Wakoshi --> Shin-kiba) badge Y   #c1a470  4 paths
+    Tokyo Metro Hibiya Line (Naka-meguro --> Kita-Senju) badge H   #b5b5ac  2 paths
+    Tokyo Metro Hanzōmon Line (Shibuya --> Oshiage) badge Z   #8f76d6  5 paths
+    Tokyo Metro Ginza Line (Asakusa --> Shibuya) badge G   #ff9500  2 paths
+    Marunouchi Line (Ogikubo --> Ikebukuro) badge M   #f62e36  4 paths
+    C                            badge C   #00bb85  6 paths
+    Tokyo Metro Tōzai Line Local badge T   #009bbf  6 paths
+    Tokyo Metro Fukutoshin Line (Wakoshi --> Shibuya) badge F   #9c5e31  4 paths
+    Tokyo Metro Namboku Line (Meguro --> Akabane-iwabuchi) badge N   #00ac9b  2 paths
+    Tokyo subway - Meguro Bypass Line (Hiyoshi -> Meguro) badge MG  #8ba2ae  2 paths
+    Tokyo Metro - Denentoshi bypass line (Shibuya -> Chuo-Rinkan) badge DT  #937cb9  6 paths
+    Tokyo Metro - Tōjō Bypass Line (eastbound) badge TJ  #01aaaa  3 paths
+    Tokyo Metro - Odawara Bypass Line (southbound) badge OH  #939598  2 paths
+    Tokyo Metro - Mukōgaoka-Yuen Bypass Line (westbound) badge OT  #00a650  1 paths
+    TJ                           badge TJ  #004098  1 paths
+tokyometro: saved 192 KB
+toei: saved in the old format, fetching again
+toei: attempt 1
+toei: ok, 8 lines, 129 stations, 8633 points, 0 MB downloaded
+    Shinjuku Line (Motoyawata --> Shinjuku) badge S   #6cbb5a  4 paths
+    Toei Mita Line (Meguro --> Nishi-takashimadaira) badge I   #0079c2  2 paths
+    Eapōto kai toku              badge AL  #f7a28d  2 paths
+    Toei Asakusa Line (Nishi-magome --> Oshiage) badge A   #e85298  2 paths
+    Keisei Narita kūkō akusesu   badge     #fac814  1 paths
+    E                            badge E   #b6007a  2 paths
+    Tokyo subway - Meguro Bypass Line (Hiyoshi -> Meguro) badge MG  #8ba2ae  2 paths
+    Keisei Narita kūkō akusesu   badge     #ff7300  4 paths
+toei: saved 79 KB
+osaka: saved in the old format, fetching again
+osaka: attempt 1
+osaka: ok, 9 lines, 116 stations, 3939 points, 0 MB downloaded
+    Nagahori Tsurumi-Ryokuchi (Taisho --> Kadoma-Minami) badge N   #a9cc51  2 paths
+    Osaka Municipal Subway Chūō Line (Yumeshima => Nagata) badge C   #019a66  2 paths
+    Osaka Metro Imazatosuji Line badge I   #ee7b1a  2 paths
+    Osaka Metro Sennichimae Line (Nodahanshin => Minami-Tatsumi) badge S   #e44d93  2 paths
+    Osaka Municipal Subway Yotsubashi Line (Suminoekoen --> Nishi-Umeda) badge Y   #0078be  2 paths
+    Osaka Municipal Subway Sakaisuji Line (Tenjinbashisuji 6-chome --> Tengachaya) badge K   #814721  2 paths
+    Osaka Metro Tanimachi Line (Yao-Minami --> Dainichi) badge T   #522886  2 paths
+    Kintetsu Keihanna Line Local (Nagata => Gakken-Nara-Tomigaoka) badge C   #65c03a  2 paths
+    M                            badge M   #e5171f  2 paths
+osaka: saved 38 KB
+jreast: saved in the old format, fetching again
+jreast: attempt 1
+jreast: ok, 73 lines, 713 stations, 164871 points, 19 MB downloaded
+    Hachikō Line (old)           badge     #401edc  3 paths
+    Yokosuka-sen                 badge JO  #000080  9 paths
+    JR Joban Line (outbound)     badge     #00b06b  28 paths
+    JR Yokohama Line             badge JH  #1e6ddc  1 paths
+    Sagami Line (Chigasaki->Hashimoto) badge     #0f9793  11 paths
+    Toki                         badge     #1eccdc  1 paths
+    JO                           badge JO  #dc961e  3 paths
+    Shiosai                      badge     #dc601e  15 paths
+    JR Sotobō-sen (Chiba => Awa-Kamogawa) badge     #431edc  1 paths
+    JR Shinkansen (Tsubasa Train) badge     #cc1edc  15 paths
+    JM                           badge     #f05625  4 paths
+    JR Yamanote Line (Outer)     badge     #9acd32  2 paths
+    JR Itsukaichi Line (westbound) badge JC  #fe642e  12 paths
+    Kururi Line (Kisarazu->Kasusa-Kameyama) badge     #00b5ad  1 paths
+    さざなみ                         badge     #dc1e40  2 paths
+    JR Narita-sen                badge     #dccf1e  5 paths
+    JB                           badge     #ffd400  11 paths
+    Shonan-Shinjuku Line (Maebashi => Odawara) badge JS  #dc2828  9 paths
+    JK                           badge     #00b2e5  4 paths
+    Ueno-Tokyo Line (down)       badge JU  #91278f  2 paths
+    JR Keiyo Line                badge     #c81e28  6 paths
+    C;JL                         badge     #00a650  2 paths
+    Takasaki Line (inner)        badge JU  #dcb61e  6 paths
+    Kinugawa Train               badge     #40dc1e  7 paths
+    JR Narita-sen (Abiko-shisen) badge     #008080  1 paths
+    JR Utsunomiya Line           badge     #dca61e  15 paths
+    C;JL                         badge     #808080  2 paths
+    JR Tohoku Line (outbound)    badge     #1edc30  1 paths
+    JR Tohoku Main Line (inbound) badge     #c51edc  3 paths
+    Tohoku Main Line (inbound)   badge     #1ea6dc  3 paths
+    JR Chuo Line (downside)      badge JC  #dc701e  5 paths
+    Azusa (Shinjuku => Matsumoto) badge     #8c1edc  3 paths
+    Tohoku Shinkansen (outbound) badge     #dc3a1e  3 paths
+    Tohoku Shinkansen (inbound)  badge     #1eafdc  3 paths
+    Kagayaki (Tsuruga => Tokyo)  badge     #1edcd5  1 paths
+    Kagayaki (Tokyo => Tsuruga)  badge     #1e63dc  1 paths
+    Asama (Tokyo => Nagano)      badge     #dcac1e  1 paths
+    Asama (Nagano => Tokyo)      badge     #ccdc1e  1 paths
+    Tokyo Metro - Chuo bypass line (Westbound) badge JB  #7ec0ee  2 paths
+    JL                           badge     #00b06b  6 paths
+    JR Yokohama Line Local (Sakuragicho => Hachioji) badge JH  #9acd32  4 paths
+    JR Negishi-sen (nobori)      badge JK  #00bfff  2 paths
+    JE                           badge     #c81e28  1 paths
+    JR Chuo Line Rapid (upside)  badge JC  #f15620  2 paths
+    N'EX                         badge     #1e86dc  9 paths
+    JI                           badge JI  #ffff00  6 paths
+    Ueno-Tokyo Line (down)       badge     #1edc76  1 paths
+    Ueno-Tokyo Line (up)         badge     #a9dc1e  1 paths
+    JR Utsunomiya Line           badge JU  #f68b1e  1 paths
+    Toki                         badge     #dc791e  2 paths
+    Tanigawa                     badge     #dc1ed8  1 paths
+    Tanigawa                     badge     #dc1e80  3 paths
+    JR Nambu Line Hamakawasaki Branch Local (Hama-Kawasaki => Shitte) badge     #ffd400  2 paths
+                                 badge     #1e1edc  1 paths
+                                 badge     #dcaf1e  1 paths
+                                 badge     #1edc9c  1 paths
+                                 badge     #1edc9f  1 paths
+                                 badge     #4ddc1e  1 paths
+                                 badge     #1edc27  1 paths
+                                 badge     #1edc40  1 paths
+    Hachiko Line (Hachioji->Komagawa) badge     #a8a39d  15 paths
+    Kururi Line (Kazusa-Kameyama->Kisarazu) badge     #dc1e7d  1 paths
+    Azusa (Matsumoto => Shinjuku) badge     #661edc  1 paths
+                                 badge     #d21edc  1 paths
+                                 badge     #8f1edc  1 paths
+                                 badge     #dcc51e  1 paths
+                                 badge     #1e3adc  1 paths
+                                 badge     #dcd81e  1 paths
+                                 badge     #801edc  1 paths
+    Hitachi (outbound)           badge     #dca31e  1 paths
+    Hitachi (inbound)            badge     #211edc  1 paths
+                                 badge     #dc1e7d  1 paths
+    JA                           badge     #00ac9a  4 paths
+jreast: saved 1375 KB
+tokyoprivate: saved in the old format, fetching again
+tokyoprivate: attempt 1
+tokyoprivate: ok, 60 lines, 636 stations, 92033 points, 10 MB downloaded
+    Tokyu-Denentoshi Line (Chuo-Rinkan -> Shibuya) badge DT  #20a288  2 paths
+    Tobu Nikko Line (northbound) badge TN  #f5a300  1 paths
+    KS                           badge KS  #0000cd  8 paths
+    Mt.Fuji                      badge     #dc801e  13 paths
+    Odakyu Electric Railway Tama Line (West->East) badge OT  #0d82c7  18 paths
+    Tokyu-Toyoko Line            badge TY  #da0442  2 paths
+    Tsukuba Express Line (Tsukaba -> Akihabara) badge TX  #000084  2 paths
+    KS                           badge KS  #073686  4 paths
+    U                            badge U   #1662b8  2 paths
+    R                            badge R   #00389e  2 paths
+    Koedo                        badge     #d13169  4 paths
+    京成本線通特 (Keisei Main Line Commuter Express) badge     #dc1ecc  1 paths
+    京成本線快特 (Keisei Main Line HS Limited Express) badge     #dc1e57  1 paths
+    京成本線特急 (Keisei Main Line Limited Express) badge     #dc1e40  1 paths
+    京成本線快速 (Keisei Main Line Rapid) badge     #571edc  1 paths
+    Keisei honsen                badge KS  #005aaa  4 paths
+    Cityliner                    badge     #969696  2 paths
+    KS-AE                        badge     #fac814  6 paths
+    Hakone                       badge     #1e3ddc  14 paths
+    Sagami                       badge     #5adc1e  2 paths
+    Super Hakone                 badge     #1edc66  1 paths
+    Tōbu Daishi Line             badge TS  #1e64c8  7 paths
+    Tokyu Kodomonokuni Line (Nagatsuta -> Kodomonokuni) badge KD  #0068b7  2 paths
+    Tobu Urban Park Line (Sur->Center) badge TD  #00bfff  21 paths
+    Tōkyū Tamagawa Line (Kamata -> Tamagawa) badge TM  #ae0378  2 paths
+    Tokyu-Meguro Line (Hiyoshi -> Meguro) badge MG  #009cd2  3 paths
+    Kinugawa Train               badge     #40dc1e  7 paths
+    Seibu Seibu-en Line (Westbound) badge SK  #00cc00  1 paths
+    新京成線(Shin Keisei Line)       badge     #dc631e  0 paths
+    SG                           badge SG  #fcc70d  2 paths
+    Seibu Tamagawa Line          badge SW  #ef810f  3 paths
+    Seibu Yamaguchi Line (Tamako -> Seibu-Kyūjōmae) badge SY  #ef473d  2 paths
+    Tokyu Oimachi Line (Oimachi -> Mizonokuchi) badge OM  #f18c43  2 paths
+    Tokyu Ikegami Line (Kamata -> Gotanda) badge IK  #ee86a7  2 paths
+    S-Train (Weekdays)           badge S   #dc1e30  4 paths
+    Tōbu Sukaitsurī rain         badge TS  #0f6cc3  4 paths
+    Seibu Shinjuku Line (South->North) badge SS  #00a6bf  7 paths
+    Tokyo subway - Meguro Bypass Line (Hiyoshi -> Meguro) badge MG  #8ba2ae  2 paths
+    Tokyo Metro - Denentoshi bypass line (Shibuya -> Chuo-Rinkan) badge DT  #937cb9  6 paths
+    Tokyo Metro - Hanno Bypass Line (eastbound) badge SI  #01aaaa  5 paths
+    Tōbu Tōjō Line (eastbound)   badge TJ  #004da3  11 paths
+    Tōbu Tōjō Line Semi Express (eastbound) badge TJ  #dc1e93  2 paths
+    Tokyo Metro - Odawara Bypass Line (southbound) badge OH  #939598  11 paths
+    Tokyo Metro - Mukōgaoka-Yuen Bypass Line (westbound) badge OT  #00a650  2 paths
+    Keio Railway Keio New Line (Shinjuku --> Sasaduka) badge KO  #e50b84  14 paths
+    Yurakucho-Ikebukuro Line (eastbound) badge SI  #ed772d  2 paths
+    Keisei Matsudo Sen           badge SL  #e95098  2 paths
+    Keisei Narita kūkō akusesu   badge     #ff7300  4 paths
+    Keio Inokashira Line (Shibuya --> Kichijoji) badge IN  #083476  2 paths
+    Tobu Isesaki Line (southeastbound) badge TI  #dc2828  16 paths
+    Tobu Nikko Line (southbound) badge TN  #f68b1e  1 paths
+    F                            badge F   #9c5e31  1 paths
+    TJ                           badge TJ  #004098  1 paths
+    Odakyu Odawara & Enoshima Lines Rapid Express (Shinjuku => Fujisawa) badge     #f29600  2 paths
+                                 badge     #1e40dc  2 paths
+    Tokyu Shin-Yokohama Line (Shin-Yokohama -> Hiyoshi) badge SH  #56dc1e  2 paths
+                                 badge     #99cc00  2 paths
+    Enoshima (Katase-Enoshima => Shinjuku) badge     #df2413  4 paths
+    Keisei Main Line Local (Keisei Tsudanuma => Keisei Ueno) badge KS  #014ea0  6 paths
+    OE                           badge OE  #2288cc  5 paths
+tokyoprivate: saved 789 KB
+yokohama: saved in the old format, fetching again
+yokohama: attempt 1
+yokohama: overpass-api.de: HTTP 502 # 502 Gateway Timeout This Overpass API server is currently at capacity. All query workers are busy and the request queue is full. ## What to do Retry your requ | overpass.private.coffee: network error: timeout: global | overpass.kumi.systems: network error: timeout: global
+yokohama: attempt 2
+yokohama: ok, 20 lines, 300 stations, 21523 points, 2 MB downloaded
+    Tokyo Metro Hibiya Line (Naka-meguro --> Kita-Senju) badge H   #b5b5ac  2 paths
+    Toei Mita Line (Meguro --> Nishi-takashimadaira) badge I   #0079c2  2 paths
+    Yokohama Minatomirai Line (Yokohama->Motomachi-chukagai) badge MM  #c61094  2 paths
+    Blue Line                    badge B   #005ba5  2 paths
+    Enoshima Electric Railway    badge EN  #dc761e  7 paths
+    Eapōto kai toku              badge AL  #f7a28d  2 paths
+    Toei Asakusa Line (Nishi-magome --> Oshiage) badge A   #e85298  2 paths
+    Keisei Narita kūkō akusesu   badge     #fac814  1 paths
+    Green Line(Nakayama->Hiyoshi) badge G   #048d58  2 paths
+    Kanazawa Seaside Line (to Kanazawa-Hakkei) badge SL  #004ea2  2 paths
+    SG                           badge SG  #fcc70d  2 paths
+    Tokyo Metro Namboku Line (Meguro --> Akabane-iwabuchi) badge N   #00ac9b  2 paths
+    Tokyo subway - Meguro Bypass Line (Hiyoshi -> Meguro) badge MG  #8ba2ae  4 paths
+    Tokyo Metro - Denentoshi bypass line (Shibuya -> Chuo-Rinkan) badge DT  #937cb9  6 paths
+    Tokyo Metro - Toyoko Bypass Line badge TY  #01aaaa  3 paths
+    Tokyo Metro - Odawara Bypass Line (southbound) badge OH  #939598  2 paths
+    Tokyo Metro - Mukōgaoka-Yuen Bypass Line (westbound) badge OT  #00a650  1 paths
+    Keisei Narita kūkō akusesu   badge     #ff7300  4 paths
+    F                            badge F   #9c5e31  1 paths
+    TJ                           badge TJ  #004098  1 paths
+yokohama: saved 196 KB
+nagoya: saved in the old format, fetching again
+nagoya: attempt 1
+nagoya: ok, 6 lines, 98 stations, 3103 points, 0 MB downloaded
+    Higashiyama Line (Takabata --> Fujigaoka) badge H   #fab123  2 paths
+    Meijō Line (Clockwise        badge M   #b074d6  4 paths
+    Tsurumai Line (Kami-Otai --> Akaike) badge T   #009bbf  2 paths
+    Sakura Dōri Line (Nakamura Kuyakusho --> Tokushige) badge S   #c92f44  2 paths
+    Kamiiida Line (Kami-Iida --> Heian-dōri) badge K   #ea7ab2  1 paths
+    Aichi Rapid Transit          badge L   #0067c0  2 paths
+nagoya: saved 30 KB
+kyoto: saved in the old format, fetching again
+kyoto: attempt 1
+kyoto: ok, 2 lines, 31 stations, 976 points, 0 MB downloaded
+    K                            badge K   #3cb371  2 paths
+    T                            badge T   #ff4500  2 paths
+kyoto: saved 9 KB
+fukuoka: saved in the old format, fetching again
+fukuoka: attempt 1
+fukuoka: ok, 3 lines, 36 stations, 1301 points, 0 MB downloaded
+    Fukuoka City Subway Nanakuma Line badge N   #008000  2 paths
+    Fukuoka City Subway Kūkō Line badge K   #ff4500  2 paths
+    Fukuoka City Subway Hakozaki Line badge H   #0077cc  2 paths
+fukuoka: saved 12 KB
+sapporo: saved in the old format, fetching again
+sapporo: attempt 1
+sapporo: ok, 3 lines, 46 stations, 797 points, 0 MB downloaded
+    Tōzai Line (Miyanosawa --> Shin Sapporo) badge T   #ff8c00  2 paths
+    Namboku Line (Asabu --> Makaomanai) badge N   #008800  2 paths
+    Toho Line                    badge H   #1e64c8  2 paths
+sapporo: saved 9 KB
+jrwest: saved in the old format, fetching again
+jrwest: attempt 1
+jrwest: ok, 39 lines, 277 stations, 86019 points, 13 MB downloaded
+    Kounotori (Kinosaki-Onsen => Shin-Osaka) badge     #ffcc00  11 paths
+    Thunderbird                  badge     #a61edc  1 paths
+    JR Nara Line Miyakoji Rapid (Kyoto => Nara) badge D   #ba7c31  14 paths
+    JR Osaka Higashi Line (Osaka => Kyuhoji) badge F   #447694  3 paths
+    JR Sakurajima Line           badge P   #1edccc  2 paths
+    Limited Express Haruka (Kyoto => Kansai Airport) badge     #1e76dc  1 paths
+    Mizuho (Kagoshima-Chuo => Shin-Osaka) badge     #dc661e  1 paths
+    Mizuho (Shin-Osaka => Kagoshima-Chuo) badge     #dc1eb9  1 paths
+                                 badge     #1edc40  2 paths
+    Thunderbird                  badge     #dc1ed2  4 paths
+    Osaka Loop Line (outer)      badge O   #e80000  2 paths
+                                 badge     #dc1e7d  4 paths
+                                 badge     #761edc  4 paths
+                                 badge     #dc1e63  10 paths
+                                 badge     #891edc  12 paths
+    Sagamo Line                  badge E   #7785c2  2 paths
+    JR Hanwa Line Local (Wakayama => Tennoji) badge R   #f79c1f  24 paths
+    JR Sakurai Line Local (Takada => Nara) badge U   #d02332  9 paths
+    Tambaji Rapid (Osaka => Fukuchiyama) badge G   #ff6600  14 paths
+    JR Yamatoji Line Local (Kamo => JR Namba) badge Q   #02ad73  10 paths
+    JR Takarazuka Line Local (Osaka => Sasayamaguchi) badge G   #fec210  1 paths
+    JR Kosei Line Local (Kyoto => Nagahara) badge B   #00bfff  16 paths
+    JR Katamachi Line Local (Kizu => Kyobashi) badge H   #ee3689  12 paths
+    JR Tōzai Line (Kyobashi => Amagasaki) badge H   #ff1493  1 paths
+    Sanyō Main Line (A)          badge     #dc1e21  5 paths
+    JR Kobe Line Special Rapid (Himeji => Osaka) badge A   #0072bc  2 paths
+    Kodama                       badge     #1edc79  1 paths
+    Kodama                       badge     #1eb2dc  1 paths
+    Limited Express Haruka (Kansai Airport => Kyoto) badge     #dca91e  1 paths
+    JR Kyoto-JR Takarazuka Lines Local (Takatsuki => Shin-Sanda) badge G   #ffba00  2 paths
+    JR Takarazuka-JR Kyoto Lines Local (Shin-Sanda => Takatsuki) badge A   #0072ba  2 paths
+    JR Takarazuka Line Regional Rapid (Osaka => Sasayamaguchi) badge G   #008000  3 paths
+    Fukuchiyama Line Local (Fukuchiyama => Sasayamaguchi) badge G   #ffc600  9 paths
+    JR Fukuchiyama Line Local (Osaka => Fukuchiyama) badge G   #dc4a1e  1 paths
+    Limited Express Rakuraku-Yamato (Nara => Shin-Osaka) badge     #dc1e2d  1 paths
+    Limited Express Rakuraku-Yamato (Shin-Osaka => Nara) badge     #dc601e  1 paths
+    Limited Express Mahoroba (Osaka => Nara) badge     #4ddc1e  1 paths
+    Limited Express Mahoroba (Nara => Osaka) badge     #1edcb9  1 paths
+    Direct Rapid (Kansai Airport => Kyobashi) badge     #007ac2  3 paths
+jrwest: saved 709 KB
+shinkansen: saved in the old format, fetching again
 shinkansen: attempt 1
-shinkansen: overpass-api.de: HTTP 502 # 502 Gateway Timeout This Overpass API server is currently at capacity. All query workers are busy and the request queue is full. ## What to do Retry your requ | overpass.private.coffee: network error: timeout: global | overpass.kumi.systems: HTTP 504 <?xml version="1.0" encoding="UTF-8"?> <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"> <html xmlns
-shinkansen: attempt 2
-shinkansen: ok, 35 lines, 127 stations, 169780 points, 17 MB downloaded
+shinkansen: ok, 35 lines, 127 stations, 168781 points, 17 MB downloaded
     Kamome                       badge     #dc861e  16 paths
     JR Shinkansen (Hayate Train) badge     #1edc70  7 paths
     JR Shinkansen (Komachi Train) badge     #1e50dc  8 paths
@@ -33,7 +316,7 @@ shinkansen: ok, 35 lines, 127 stations, 169780 points, 17 MB downloaded
     Toki                         badge     #dc791e  2 paths
     Tanigawa                     badge     #dc1ed8  1 paths
     Tanigawa                     badge     #dc1e80  3 paths
-                                 badge     #8c1edc  5 paths
+                                 badge     #8c1edc  4 paths
     Kodama                       badge     #1edc79  1 paths
     Kodama                       badge     #1eb2dc  1 paths
     Hakutaka                     badge     #1edc8f  3 paths
