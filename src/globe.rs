@@ -143,7 +143,7 @@ pub fn draw(painter: &egui::Painter, c: Pos2, r: f32, tex: Option<&egui::Texture
 
     // graticule every 30 degrees
     let grid = Stroke::new(0.6_f32, Color32::from_white_alpha(46));
-    let mut strip = |pts: &mut Vec<Pos2>, stroke: Stroke| {
+    let strip = |pts: &mut Vec<Pos2>, stroke: Stroke| {
         if pts.len() >= 2 {
             painter.add(egui::Shape::line(std::mem::take(pts), stroke));
         } else {

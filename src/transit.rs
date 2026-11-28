@@ -51,7 +51,7 @@ fn tmap_path(dir: &Path, id: &str) -> PathBuf {
 
 impl TransitManager {
     pub fn new(ctx: &egui::Context, data_dir: PathBuf) -> Self {
-        let slots = SYSTEMS
+        let slots: Vec<Slot> = SYSTEMS
             .iter()
             .map(|c| Slot {
                 enabled: false,
