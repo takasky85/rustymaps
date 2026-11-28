@@ -35,9 +35,14 @@ pub const ROAD_TRUNK: u32 = 21;
 pub const ROAD_MOTORWAY: u32 = 22;
 pub const BORDER_STATE: u32 = 23;
 pub const BORDER_COUNTRY: u32 = 24;
+// airfields (their colours are made from the palette's, see `Palette::colors`)
+pub const AERO_FILL: u32 = 25;
+pub const AERO_LINE: u32 = 26;
 
 /// Number of style ids in use.
-pub const COUNT: usize = 25;
+pub const COUNT: usize = 27;
+/// Styles whose colour each palette lists by hand (the first ones).
+const PALETTE_COLORS: usize = 25;
 /// Size of the uniform table on the GPU (must match shader.wgsl).
 pub const TABLE_SIZE: usize = 32;
 
@@ -60,7 +65,7 @@ struct PaletteDef {
     name: &'static str,
     dark: bool,
     /// 0xRRGGBB per style id (see the constants above).
-    colors: [u32; COUNT],
+    colors: [u32; PALETTE_COLORS],
 }
 
 const PALETTES: &[PaletteDef] = &[
@@ -297,12 +302,16 @@ impl Palette {
         for (o, c) in out.iter_mut().zip(PALETTES[self.0].colors) {
             *o = [(c >> 16) as u8, (c >> 8) as u8, c as u8];
         }
+        // airfields: ground a little greyer than other land use, runways a middle grey-white
+        let mix = |a: [u8; 3], b: [u8; 3], t: f32| [0, 1, 2].map(|k| (a[k] as f32 + (b[k] as f32 - a[k] as f32) * t).round() as u8);
+        out[AERO_FILL as usize] = mix(out[LANDUSE_OTHER as usize], out[RAIL as usize], 0.25);
+        out[AERO_LINE as usize] = mix(out[ROAD_SERVICE as usize], out[RAIL as usize], 0.45);
         out
     }
 }
 
 /// Style table for the shader: per id `[r, g, b, a, width_px, casing_px, 0, 0]`.
-pub fn table(zf: f64, ppp: f32, palette: Palette) -> [[f32; 8]; TABLE_SIZE] {
+pub fn table(zf: f64, ppp: f32, palette: Palette, detail: &crate::detail::MapDetail) -> [[f32; 8]; TABLE_SIZE] {
     let mut t = [[0.0f32; 8]; TABLE_SIZE];
     let cols = palette.colors();
     let rgb = |id: u32| {
@@ -336,9 +345,24 @@ pub fn table(zf: f64, ppp: f32, palette: Palette) -> [[f32; 8]; TABLE_SIZE] {
     line(ROAD_MOTORWAY, lerp_w(zf, 4.5, 1.2, 17.0, 12.0));
     line(BORDER_STATE, lerp_w(zf, 3.5, 0.7, 8.0, 1.3));
     line(BORDER_COUNTRY, lerp_w(zf, 0.0, 0.9, 8.0, 1.8));
+    // runways and taxiways
+    line(AERO_LINE, lerp_w(zf, 9.0, 1.2, 17.0, 9.0));
+    {
+        let c = rgb(AERO_FILL);
+        t[AERO_FILL as usize] = [c[0], c[1], c[2], ((zf - 10.0) / 2.0).clamp(0.0, 1.0) as f32, 0.0, 0.0, 0.0, 0.0];
+    }
     // Small features thin out towards the horizon of a tilted view (see vs_line).
     for id in [PATH, ROAD_SERVICE, ROAD_MINOR, ROAD_TERTIARY, ROAD_SECONDARY, RAIL, WATERWAY, FERRY] {
         t[id as usize][6] = 1.0;
+    }
+    // what the user has switched off is drawn with no colour and no width
+    for id in 1..COUNT as u32 {
+        if !detail.style_on(id) {
+            let e = &mut t[id as usize];
+            e[3] = 0.0;
+            e[4] = 0.0;
+            e[5] = 0.0;
+        }
     }
     t
 }
@@ -438,6 +462,24 @@ fn label_rule_light(kind: Kind, rank: u32, zf: f64) -> Option<LabelRule> {
             priority: 40.0 + r,
             upper: false,
         }),
+        Kind::Poi => {
+            // rank: 1 is the most important; more of them appear as you zoom in
+            let limit = if zf < 15.0 {
+                return None;
+            } else if zf < 16.0 {
+                8
+            } else if zf < 17.0 {
+                30
+            } else if zf < 17.8 {
+                100
+            } else {
+                100_000
+            };
+            (rank <= limit).then_some(LabelRule { size: 10.0, color: [55, 55, 65], halo: white, priority: 45.0 + rank.min(100) as f32 * 0.04, upper: false })
+        }
+        Kind::HouseNumber => (zf >= 17.6).then_some(LabelRule { size: 9.0, color: [120, 105, 95], halo: white, priority: 70.0, upper: false }),
+        Kind::Peak => (zf >= 9.0).then_some(LabelRule { size: 10.5, color: [120, 82, 52], halo: white, priority: 24.0 + r, upper: false }),
+        Kind::Airport => (7.5..16.5).contains(&zf).then_some(LabelRule { size: 11.0, color: [60, 62, 120], halo: white, priority: 12.0 + r, upper: false }),
         // Street names: rank is the road class (0 motorway .. 6 service); smaller roads need more zoom.
         Kind::Street => {
             let from = [13.5, 13.5, 13.5, 14.5, 15.0, 15.5, 16.5][rank.min(6) as usize];
@@ -455,11 +497,12 @@ fn label_rule_light(kind: Kind, rank: u32, zf: f64) -> Option<LabelRule> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::detail::MapDetail;
 
     #[test]
     fn table_has_every_style_and_hides_by_zoom() {
-        let far = table(1.0, 1.0, Palette::STANDARD);
-        let near = table(14.0, 1.0, Palette::STANDARD);
+        let far = table(1.0, 1.0, Palette::STANDARD, &MapDetail::default());
+        let near = table(14.0, 1.0, Palette::STANDARD, &MapDetail::default());
         assert!(far[ROAD_MINOR as usize][4] == 0.0, "minor roads hidden at globe scale");
         assert!(near[ROAD_MINOR as usize][4] > 1.0, "minor roads visible at city scale");
         assert!(far[BORDER_COUNTRY as usize][4] > 0.0, "country borders always visible");
@@ -467,12 +510,19 @@ mod tests {
         for id in 0..COUNT {
             assert!(near[id][3] >= 0.0);
         }
+        // a switched-off style has no colour and no width
+        let mut off = MapDetail::default();
+        off.set(crate::detail::ROADS_LOCAL, false);
+        off.set(crate::detail::BUILDINGS, false);
+        let hidden = table(14.0, 1.0, Palette::STANDARD, &off);
+        assert!(hidden[ROAD_MINOR as usize][3] == 0.0 && hidden[ROAD_MINOR as usize][4] == 0.0 && hidden[BUILDING as usize][3] == 0.0);
+        assert!(hidden[ROAD_PRIMARY as usize][4] > 0.0 && hidden[BG as usize][3] == 1.0);
         // every palette defines every style, and they really differ
-        let std_water = table(5.0, 1.0, Palette::STANDARD)[WATER as usize];
-        let bright_water = table(5.0, 1.0, Palette::BRIGHT)[WATER as usize];
+        let std_water = table(5.0, 1.0, Palette::STANDARD, &MapDetail::default())[WATER as usize];
+        let bright_water = table(5.0, 1.0, Palette::BRIGHT, &MapDetail::default())[WATER as usize];
         assert!(std_water[..3] != bright_water[..3]);
         // pixel-ratio scaling applies to widths
-        assert_eq!(table(14.0, 2.0, Palette::STANDARD)[ROAD_MINOR as usize][4], 2.0 * near[ROAD_MINOR as usize][4]);
+        assert_eq!(table(14.0, 2.0, Palette::STANDARD, &MapDetail::default())[ROAD_MINOR as usize][4], 2.0 * near[ROAD_MINOR as usize][4]);
     }
 
     #[test]
@@ -492,7 +542,7 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for p in Palette::all() {
             assert!(seen.insert(p.colors()), "{} duplicates another style", p.name());
-            let t = table(12.0, 1.0, p);
+            let t = table(12.0, 1.0, p, &MapDetail::default());
             assert!(t[WATER as usize][3] == 1.0 && t[ROAD_PRIMARY as usize][4] > 0.0);
         }
         let dark = Palette::all().find(|p| p.dark()).expect("a dark style exists");

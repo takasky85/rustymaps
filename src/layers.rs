@@ -7,6 +7,7 @@ use eframe::egui::{self, Color32, RichText, Sense, Shape, Stroke};
 use std::sync::Arc;
 
 use crate::phonesync::{self, PhoneSync};
+use crate::detail;
 use crate::tracks;
 use crate::transit;
 use crate::App;
@@ -127,6 +128,42 @@ impl App {
         }
     }
 
+    /// "Map details": a switch for every kind of thing the map tiles hold.
+    fn map_detail_section(&mut self, ui: &mut egui::Ui) {
+        let off = detail::ITEMS.iter().enumerate().filter(|(i, _)| !self.detail.get(*i)).count();
+        let title = if off == 0 { "Map details".to_string() } else { format!("Map details ({off} hidden)") };
+        egui::CollapsingHeader::new(title).id_salt("map_details").default_open(false).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                if ui.small_button("Show all").clicked() {
+                    self.detail.set_all(None, true);
+                }
+                if ui.small_button("Hide all").clicked() {
+                    self.detail.set_all(None, false);
+                }
+            });
+            egui::ScrollArea::vertical().max_height(340.0).auto_shrink([true, true]).show(ui, |ui| {
+                let mut group = "";
+                for (i, it) in detail::ITEMS.iter().enumerate() {
+                    if it.group != group {
+                        group = it.group;
+                        ui.add_space(3.0);
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(group).strong());
+                            if ui.small_button("all").clicked() {
+                                self.detail.set_all(Some(group), true);
+                            }
+                            if ui.small_button("none").clicked() {
+                                self.detail.set_all(Some(group), false);
+                            }
+                        });
+                    }
+                    ui.checkbox(self.detail.flag_mut(i), it.name);
+                }
+            });
+            ui.small("Takes effect at once; nothing is downloaded again. Places of interest, house numbers and names appear as you zoom in.");
+        });
+    }
+
     /// The panel under the Layers button.
     pub(crate) fn layers_popup(&mut self, ctx: &egui::Context, at: egui::Pos2, button: egui::Rect, now: f64) {
         if !self.layers_open {
@@ -140,6 +177,8 @@ impl App {
                 ui.set_width(330.0);
                 ui.label(RichText::new("Layers").strong());
                 ui.separator();
+                self.map_detail_section(ui);
+                ui.add_space(4.0);
                 ui.checkbox(&mut self.show_transit, "Transit map");
                 ui.add_enabled_ui(self.show_transit, |ui| {
                     ui.indent("layers_transit", |ui| {

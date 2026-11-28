@@ -8,6 +8,7 @@
 mod camera;
 mod clean;
 mod data;
+mod detail;
 mod flight;
 mod fly;
 mod fonts;
@@ -268,6 +269,8 @@ struct App {
     show_tracks: bool,
     layers_open: bool,
     tracks: tracks::TrackSet,
+    /// Which parts of the map are drawn (switched in the Layers panel).
+    detail: detail::MapDetail,
     /// Which version of the GPS paths is drawn (the original, the tidied copy, or both).
     track_view: tracks::View,
     /// The clicked GPS path and its replay.
@@ -359,6 +362,7 @@ impl App {
             dnd: None,
             show_transit: true,
             show_tracks: true,
+            detail: detail::MapDetail::default(),
             track_view: tracks::View::Both,
             player: None,
             layers_open: false,
@@ -786,7 +790,7 @@ impl eframe::App for App {
                 ],
                 head: [self.cam.heading.sin() as f32, self.cam.heading.cos() as f32, 0.0, 0.0],
                 screen: [w as f32 * ppp, h as f32 * ppp, 0.0, 0.0],
-                styles: style::table(zf, ppp, self.palette),
+                styles: style::table(zf, ppp, self.palette, &self.detail),
             };
             let painter = ui.painter().with_clip_rect(rect);
             painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(8, 10, 22));
@@ -955,7 +959,7 @@ impl eframe::App for App {
 
             // --- labels ---
             if self.show_labels {
-                let ls = LabelStyle { scale: LABEL_SIZES[self.label_size].1, bold: self.label_bold, dark: self.palette.dark(), family: fonts::Fonts::family(), real_bold: self.fonts.has_real_bold() };
+                let ls = LabelStyle { scale: LABEL_SIZES[self.label_size].1, bold: self.label_bold, dark: self.palette.dark(), family: fonts::Fonts::family(), real_bold: self.fonts.has_real_bold(), detail: self.detail.clone() };
                 let map_labels = if focus > 0.5 { &frame_tiles.labels[..0] } else { &frame_tiles.labels[..] };
                 let blocked = transit::marker_rects(&self.cam, rect, zf, &markers);
                 draw_labels(&painter, rect, &pr, zf, map_labels, extras, &ls, &blocked, &mut self.labels_shown);
@@ -1181,6 +1185,8 @@ struct Cand {
     key: u64,
     /// A smaller second line under the text (the English name under a local one); "" for none.
     sub: String,
+    /// A coloured dot at `at` with the text underneath it (places of interest).
+    dot: Option<[u8; 3]>,
 }
 
 impl Cand {
@@ -1188,7 +1194,7 @@ impl Cand {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         text.hash(&mut h);
-        Cand { priority, text, size, color, halo, at, angle: 0.0, key: h.finish(), sub: String::new() }
+        Cand { priority, text, size, color, halo, at, angle: 0.0, key: h.finish(), sub: String::new(), dot: None }
     }
 
     fn from_station(l: StationLabel) -> Self {
@@ -1207,6 +1213,8 @@ struct LabelStyle {
     family: egui::FontFamily,
     /// The chosen font has an installed bold face, so bold uses it instead of overdrawing.
     real_bold: bool,
+    /// Which kinds of label are switched off.
+    detail: detail::MapDetail,
 }
 
 /// Places labels greedily by priority; a label that would overlap one already placed is dropped.
@@ -1224,6 +1232,9 @@ fn draw_labels(
     let (w, h) = (rect.width() as f64, rect.height() as f64);
     for t in tiles {
         for l in t.iter() {
+            if !ls.detail.label_on(l.kind, l.cat) {
+                continue;
+            }
             let Some(rule) = style::label_rule(l.kind, l.rank, zf, ls.dark) else { continue };
             let p = merc_to_vec(l.mx, l.my);
             if !pr.visible(p) {
@@ -1236,6 +1247,12 @@ fn draw_labels(
             let text = if rule.upper { l.text.to_uppercase() } else { l.text.clone() };
             let at = rect.min + egui::vec2(s[0] as f32, s[1] as f32);
             let mut cand = Cand::new(rule.priority, text, rule.size, rule.color, rule.halo, at);
+            if l.kind == mesh::Kind::Poi {
+                cand.dot = Some(detail::poi_color(l.cat));
+            }
+            if l.kind == mesh::Kind::Peak {
+                cand.dot = Some([150, 100, 60]);
+            }
             if l.kind == mesh::Kind::Street {
                 // Only when the road piece is long enough for its name, and turned along the road
                 // (never upside down).
@@ -1290,13 +1307,21 @@ fn draw_labels(
         } else {
             egui::vec2(size.x * cs.abs() + size.y * sn.abs(), size.x * sn.abs() + size.y * cs.abs())
         };
-        let r = egui::Rect::from_center_size(c.at, ext);
-        let padded = r.expand2(egui::vec2(4.0, 2.0));
+        // a dot sits above its text
+        let text_centre = if c.dot.is_some() { c.at + egui::vec2(0.0, 7.0 + size.y * 0.5) } else { c.at };
+        let r = egui::Rect::from_center_size(text_centre, ext);
+        let mut padded = r.expand2(egui::vec2(4.0, 2.0));
+        if c.dot.is_some() {
+            padded = padded.union(egui::Rect::from_center_size(c.at, egui::vec2(10.0, 10.0)));
+        }
         if placed.iter().any(|p| p.intersects(padded)) {
             continue;
         }
         placed.push(padded);
         shown.insert(c.key);
+        if let Some(d) = c.dot {
+            painter.circle(c.at, 4.0, egui::Color32::from_rgb(d[0], d[1], d[2]), egui::Stroke::new(1.6_f32, egui::Color32::WHITE));
+        }
 
         let shadow = painter.layout_no_wrap(c.text, font, halo);
         if c.angle != 0.0 {

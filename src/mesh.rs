@@ -13,6 +13,11 @@ use crate::mvt::{self, Feature, Layer};
 use crate::style as st;
 use crate::tile_id::TileId;
 
+/// The most places of interest and house numbers kept per tile, so a dense city centre cannot make
+/// one tile heavy.
+const MAX_POI: usize = 500;
+const MAX_HOUSES: usize = 1200;
+
 /// Tile coordinate extent that all geometry is normalized to.
 pub const EXTENT: f32 = 4096.0;
 
@@ -48,6 +53,12 @@ pub enum Kind {
     Island,
     /// A street name, running along its road.
     Street,
+    /// A place of interest (cafe, museum, bus stop...), drawn as a dot with its name.
+    Poi,
+    HouseNumber,
+    /// A mountain peak, with its height.
+    Peak,
+    Airport,
 }
 
 #[derive(Clone, Debug)]
@@ -62,6 +73,8 @@ pub struct Label {
     /// of the road piece in the tile (mercator units). Zero for everything else.
     pub dir: [f32; 2],
     pub span: f32,
+    /// Places of interest only: which group (see `detail::poi_group`).
+    pub cat: u8,
 }
 
 #[derive(Default)]
@@ -213,11 +226,27 @@ impl Builder {
                     }
                 }
             }
+            "aeroway" => {
+                for f in &layer.features {
+                    if !matches!(layer.str_prop(f, "class"), Some("runway") | Some("taxiway") | Some("apron") | Some("helipad")) {
+                        continue;
+                    }
+                    match f.geom_type {
+                        3 => self.polygon(f, scale, st::AERO_FILL),
+                        2 => self.line(f, scale, st::AERO_LINE),
+                        _ => {}
+                    }
+                }
+            }
             "place" | "water_name" => {
                 for f in &layer.features {
                     self.label(layer, f, scale);
                 }
             }
+            "poi" => self.poi_labels(layer, scale),
+            "housenumber" => self.house_labels(layer, scale),
+            "mountain_peak" => self.peak_labels(layer, scale),
+            "aerodrome_label" => self.airport_labels(layer, scale),
             "transportation_name" => {
                 // street names only matter (and only fit) when zoomed in close
                 if self.id.z >= 13 {
@@ -390,7 +419,93 @@ impl Builder {
             rank: layer.num_prop(f, "rank").map(|r| r as u32).unwrap_or(50),
             dir: [0.0, 0.0],
             span: 0.0,
+            cat: 0,
         });
+    }
+
+    /// Where a point feature sits (normalized mercator), or `None` when it is in the tile's buffer
+    /// zone (it belongs to the neighbouring tile).
+    fn point_at(&self, f: &Feature, scale: f32) -> Option<(f64, f64)> {
+        if f.geom_type != 1 {
+            return None;
+        }
+        let paths = f.paths();
+        let &(px, py) = paths.first().and_then(|p| p.first())?;
+        let (lx, ly) = (px as f32 * scale, py as f32 * scale);
+        if lx < 0.0 || ly < 0.0 || lx >= EXTENT || ly >= EXTENT {
+            return None;
+        }
+        let n = (1u64 << self.id.z) as f64;
+        Some(((self.id.x as f64 + lx as f64 / EXTENT as f64) / n, (self.id.y as f64 + ly as f64 / EXTENT as f64) / n))
+    }
+
+    fn push_point(&mut self, at: (f64, f64), text: String, kind: Kind, rank: u32, cat: u8) {
+        self.labels.push(Label { mx: at.0, my: at.1, text, kind, rank, dir: [0.0, 0.0], span: 0.0, cat });
+    }
+
+    /// Places of interest, the most important MAX_POI per tile.
+    fn poi_labels(&mut self, layer: &Layer, scale: f32) {
+        // a tile this zoomed out has no room for them; they only show from about zoom 15
+        if self.id.z < 12 {
+            return;
+        }
+        let mut found: Vec<(u32, (f64, f64), String, u8)> = Vec::new();
+        for f in &layer.features {
+            let Some(text) = pick_name(layer, f) else { continue };
+            let Some(at) = self.point_at(f, scale) else { continue };
+            let class = layer.str_prop(f, "class").unwrap_or("");
+            let rank = layer.num_prop(f, "rank").map(|r| r.max(1.0) as u32).unwrap_or(100);
+            found.push((rank, at, text, crate::detail::poi_group(class)));
+        }
+        found.sort_by_key(|p| p.0);
+        found.truncate(MAX_POI);
+        for (rank, at, text, cat) in found {
+            self.push_point(at, text, Kind::Poi, rank, cat);
+        }
+    }
+
+    fn house_labels(&mut self, layer: &Layer, scale: f32) {
+        if self.id.z < 14 {
+            return;
+        }
+        let mut n = 0;
+        for f in &layer.features {
+            let Some(num) = layer.str_prop(f, "housenumber").map(str::trim).filter(|t| !t.is_empty() && t.len() <= 8) else { continue };
+            let Some(at) = self.point_at(f, scale) else { continue };
+            self.push_point(at, num.to_string(), Kind::HouseNumber, 100, 0);
+            n += 1;
+            if n >= MAX_HOUSES {
+                break;
+            }
+        }
+    }
+
+    fn peak_labels(&mut self, layer: &Layer, scale: f32) {
+        for f in &layer.features {
+            let Some(name) = pick_name(layer, f) else { continue };
+            let Some(at) = self.point_at(f, scale) else { continue };
+            let text = match layer.num_prop(f, "ele") {
+                Some(m) if m > 0.0 => format!("{name}  {} m", m.round() as i64),
+                _ => name,
+            };
+            // higher peaks are more important: rank 0 at 4000 m and up
+            let ele = layer.num_prop(f, "ele").unwrap_or(0.0);
+            let rank = (40.0 - (ele / 100.0).min(40.0)).max(0.0) as u32;
+            self.push_point(at, text, Kind::Peak, rank, 0);
+        }
+    }
+
+    fn airport_labels(&mut self, layer: &Layer, scale: f32) {
+        for f in &layer.features {
+            let Some(name) = pick_name(layer, f) else { continue };
+            let Some(at) = self.point_at(f, scale) else { continue };
+            let text = match layer.str_prop(f, "iata").map(str::trim).filter(|c| !c.is_empty()) {
+                Some(code) => format!("{name} ({code})"),
+                None => name,
+            };
+            let rank = layer.num_prop(f, "rank").map(|r| r as u32).unwrap_or(50);
+            self.push_point(at, text, Kind::Airport, rank, 0);
+        }
     }
 
     /// A street name at the middle of a named road, turned along it.
@@ -450,6 +565,7 @@ impl Builder {
             rank,
             dir,
             span: (total as f64 / EXTENT as f64 / n) as f32,
+            cat: 0,
         });
     }
 }
@@ -522,6 +638,57 @@ mod tests {
         assert_eq!(mesh.lines.len(), motorway + minor, "unknown class is dropped");
         // Lines are sorted by style id: minor (17) before motorway (22).
         assert!(mesh.lines.first().unwrap().style < mesh.lines.last().unwrap().style);
+    }
+
+    #[test]
+    fn places_of_interest_house_numbers_peaks_and_airports_become_labels() {
+        use crate::mvt::test_enc::*;
+        let pt = |x, y| Geom::Point(x, y);
+        let poi = tile(
+            "poi",
+            vec![
+                Feat { geom: pt(100, 100), props: vec![("name", Val::S("Blue Cafe")), ("class", Val::S("cafe")), ("rank", Val::N(7.0))] },
+                Feat { geom: pt(200, 200), props: vec![("name", Val::S("General Hospital")), ("class", Val::S("hospital")), ("rank", Val::N(2.0))] },
+                Feat { geom: pt(300, 300), props: vec![("class", Val::S("cafe"))] },
+            ],
+        );
+        let m = build_mesh(TileId { z: 14, x: 2, y: 5 }, &poi).unwrap();
+        assert_eq!(m.labels.len(), 2, "the one without a name is dropped");
+        assert_eq!(m.labels[0].text, "General Hospital", "most important first");
+        assert!(m.labels.iter().all(|l| l.kind == Kind::Poi));
+        assert_eq!((m.labels[0].cat, m.labels[1].cat), (3, 0));
+        // not kept on a zoomed-out tile
+        assert!(build_mesh(TileId { z: 8, x: 2, y: 5 }, &poi).unwrap().labels.is_empty());
+
+        let houses = tile("housenumber", vec![Feat { geom: pt(50, 50), props: vec![("housenumber", Val::S("221B"))] }, Feat { geom: pt(60, 60), props: vec![] }]);
+        let m = build_mesh(TileId { z: 14, x: 2, y: 5 }, &houses).unwrap();
+        assert_eq!(m.labels.len(), 1);
+        assert_eq!((m.labels[0].kind, m.labels[0].text.as_str()), (Kind::HouseNumber, "221B"));
+
+        let peaks = tile("mountain_peak", vec![Feat { geom: pt(10, 10), props: vec![("name", Val::S("Mt Tam")), ("ele", Val::N(784.0))] }]);
+        let m = build_mesh(TileId { z: 10, x: 1, y: 1 }, &peaks).unwrap();
+        assert_eq!((m.labels[0].kind, m.labels[0].text.as_str()), (Kind::Peak, "Mt Tam  784 m"));
+
+        let air = tile("aerodrome_label", vec![Feat { geom: pt(10, 10), props: vec![("name", Val::S("San Francisco Intl")), ("iata", Val::S("SFO"))] }]);
+        let m = build_mesh(TileId { z: 10, x: 1, y: 1 }, &air).unwrap();
+        assert_eq!((m.labels[0].kind, m.labels[0].text.as_str()), (Kind::Airport, "San Francisco Intl (SFO)"));
+    }
+
+    #[test]
+    fn runways_and_aprons_are_drawn() {
+        use crate::mvt::test_enc::*;
+        let data = tile(
+            "aeroway",
+            vec![
+                Feat { geom: Geom::Line(vec![(0, 0), (1000, 0)]), props: vec![("class", Val::S("runway"))] },
+                Feat { geom: Geom::Polygon(vec![vec![(0, 100), (500, 100), (500, 600), (0, 600)]]), props: vec![("class", Val::S("apron"))] },
+                Feat { geom: Geom::Line(vec![(0, 5), (1000, 5)]), props: vec![("class", Val::S("gate"))] },
+            ],
+        );
+        let m = build_mesh(TileId { z: 12, x: 655, y: 1583 }, &data).unwrap();
+        assert!(m.lines.iter().all(|l| l.style == st::AERO_LINE) && !m.lines.is_empty());
+        assert_eq!(m.fills.len(), 6);
+        assert!(m.fills.iter().all(|v| v.style == st::AERO_FILL));
     }
 
     #[test]

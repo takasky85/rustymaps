@@ -85,6 +85,7 @@ impl App {
         s.set("show_transit", self.show_transit);
         s.set("show_tracks", self.show_tracks);
         s.set("track_view", self.track_view.key());
+        s.set("map_off", self.detail.encode());
         s.set("phone_sync", self.phone_sync_on);
         s.set("system_order", self.transit.order_ids().join(","));
         for (id, text) in self.transit.lines_settings() {
@@ -123,6 +124,9 @@ impl App {
         take!(self.show_tracks, "show_tracks");
         if let Some(v) = s.get::<String>("track_view").and_then(|k| crate::tracks::View::from_key(&k)) {
             self.track_view = v;
+        }
+        if let Some(v) = s.get::<String>("map_off") {
+            self.detail = crate::detail::MapDetail::decode(&v);
         }
         take!(self.phone_sync_on, "phone_sync");
         if let Some(v) = s.get::<String>("system_order") {
