@@ -7,6 +7,7 @@ use eframe::egui::{self, Color32, RichText, Sense, Shape, Stroke};
 use std::sync::Arc;
 
 use crate::phonesync::{self, PhoneSync};
+use crate::tracks;
 use crate::transit;
 use crate::App;
 
@@ -68,7 +69,7 @@ fn grip(ui: &mut egui::Ui) -> egui::Response {
     resp.on_hover_cursor(egui::CursorIcon::Grab)
 }
 
-fn clip(s: &str, n: usize) -> String {
+pub(crate) fn clip(s: &str, n: usize) -> String {
     if s.chars().count() <= n {
         s.to_string()
     } else {
@@ -106,9 +107,17 @@ impl App {
         self.phone_sync_on = on;
         if on && self.phone_sync.is_none() {
             let c = ctx.clone();
+            // The pairing file lives in the permanent per-user folder, not in the `data` folder that
+            // comes with each build; one kept there by an older version is copied over.
+            let cfg = crate::data::user_data_dir().join("sync.txt");
+            let old = self.data_dir.join("sync.txt");
+            if !cfg.exists() && old.is_file() {
+                let _ = std::fs::create_dir_all(crate::data::user_data_dir());
+                let _ = std::fs::copy(&old, &cfg);
+            }
             self.phone_sync = Some(PhoneSync::start(
                 self.tracks.dir().to_path_buf(),
-                self.data_dir.join("sync.txt"),
+                cfg,
                 phonesync::TCP_PORT,
                 phonesync::UDP_PORT,
                 Arc::new(move || c.request_repaint()),
@@ -141,6 +150,13 @@ impl App {
                 ui.checkbox(&mut self.show_tracks, "GPS paths");
                 ui.add_enabled_ui(self.show_tracks, |ui| {
                     ui.indent("layers_tracks", |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Show");
+                            for (v, name) in tracks::View::ALL {
+                                ui.selectable_value(&mut self.track_view, v, name);
+                            }
+                        });
+                        ui.small("Cleaned up drops stray jumps and smooths the wobble. The original is never changed. Click a path on the map for time, distance and replay.");
                         if self.tracks.items.is_empty() {
                             ui.small("No tracks yet. Drop a .kml file onto this window to add one.");
                         } else {

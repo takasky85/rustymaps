@@ -6,6 +6,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod camera;
+mod clean;
 mod data;
 mod flight;
 mod fly;
@@ -19,12 +20,14 @@ mod mesh;
 mod mvt;
 mod phonesync;
 mod plane;
+mod replay;
 mod search;
 mod settings;
 mod sha256;
 mod style;
 mod tile_id;
 mod tiles;
+mod trackinfo;
 mod tracks;
 mod transit;
 mod transit_data;
@@ -265,6 +268,10 @@ struct App {
     show_tracks: bool,
     layers_open: bool,
     tracks: tracks::TrackSet,
+    /// Which version of the GPS paths is drawn (the original, the tidied copy, or both).
+    track_view: tracks::View,
+    /// The clicked GPS path and its replay.
+    player: Option<tracks::Player>,
     /// Receive tracks from the phone tracker over WiFi (off until you turn it on).
     phone_sync_on: bool,
     phone_sync: Option<phonesync::PhoneSync>,
@@ -343,7 +350,7 @@ impl App {
             }
         }
 
-        let tracks = tracks::TrackSet::new(&cc.egui_ctx, &data_dir);
+        let tracks = tracks::TrackSet::new(&cc.egui_ctx, &data::user_data_dir(), &data_dir);
         let mut app = App {
             cam: Camera::from_degrees(-115.0, 32.0, 2.2),
             transit,
@@ -352,6 +359,8 @@ impl App {
             dnd: None,
             show_transit: true,
             show_tracks: true,
+            track_view: tracks::View::Both,
+            player: None,
             layers_open: false,
             phone_sync_on: false,
             phone_sync: None,
@@ -661,6 +670,22 @@ impl eframe::App for App {
                 self.cam.normalize();
             }
         }
+        // A GPS path being replayed: its clock runs, and the map can follow the walker.
+        if let Some(pl) = &mut self.player {
+            if let Some(it) = self.tracks.items.get(pl.item) {
+                let tl = it.track.timeline(self.track_view);
+                pl.advance(anim_dt, tl.total_secs());
+                if pl.playing {
+                    ctx.request_repaint();
+                    if pl.follow && self.fly.is_none() {
+                        let (lon, lat) = vec_lon_lat(tl.at(pl.u).pos);
+                        self.cam.lon = lon;
+                        self.cam.lat = lat;
+                        self.cam.normalize();
+                    }
+                }
+            }
+        }
         if ctx.input(|i| i.key_pressed(egui::Key::F11)) {
             let on = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!on));
@@ -671,6 +696,7 @@ impl eframe::App for App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
             }
             self.selected_line = None;
+            self.player = None;
             self.tab = None;
             self.layers_open = false;
             self.search_open = false;
@@ -703,6 +729,9 @@ impl eframe::App for App {
                         self.cam.shift_by(d.x as f64, d.y as f64, w, h);
                     } else {
                         self.follow = None;
+                        if let Some(pl) = &mut self.player {
+                            pl.follow = false;
+                        }
                         self.cam.pan(d.x as f64, d.y as f64, h);
                     }
                 } else if resp.dragged_by(egui::PointerButton::Secondary) || resp.dragged_by(egui::PointerButton::Middle) {
@@ -815,7 +844,25 @@ impl eframe::App for App {
             };
             // GPS paths from the phone tracker, over the transit lines and under the names.
             if self.show_tracks {
-                if let Some(text) = tracks::draw(&painter, rect, &self.cam, zf, &self.tracks.items, resp.hover_pos()) {
+                let sel = self.player.as_ref().map(|p| p.item);
+                let found = tracks::draw(&painter, rect, &self.cam, zf, &self.tracks.items, self.track_view, sel, resp.hover_pos(), click);
+                if found.hover.is_some() {
+                    ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if let Some(i) = found.click {
+                    if sel != Some(i) {
+                        let total = self.tracks.items[i].track.timeline(self.track_view).total_secs();
+                        self.player = Some(tracks::Player::new(i, total));
+                    }
+                }
+                if let Some(pl) = &self.player {
+                    if let Some(it) = self.tracks.items.get(pl.item) {
+                        if it.shown {
+                            tracks::draw_marker(&painter, rect, &self.cam, it.track.timeline(self.track_view).at(pl.u).pos, it.track.color, now);
+                        }
+                    }
+                }
+                if let Some(text) = found.caption {
                     let galley = painter.layout_no_wrap(text, egui::FontId::proportional(14.0), egui::Color32::WHITE);
                     let at = resp.hover_pos().unwrap_or(rect.center()) + egui::vec2(14.0, 16.0);
                     let r = egui::Rect::from_min_size(at, galley.size()).expand2(egui::vec2(8.0, 4.0));
@@ -979,12 +1026,25 @@ impl eframe::App for App {
         let moving = cam_now != self.prev_cam;
         self.prev_cam = cam_now;
         ctx.tessellation_options_mut(|o| o.round_text_to_pixels = !moving);
+        if self.player.as_ref().map_or(false, |p| p.playing) {
+            anim_wait = anim_wait.min(frame.as_secs_f64());
+        }
         self.pacer.set(anim_wait);
         if self.show_compass {
             self.compass(ctx, now);
         }
         self.controls(ctx, rect_for_ui, now, zf_for_ui);
         self.systems_popup(ctx, rect_for_ui, zf_for_ui);
+        if !self.show_tracks {
+            self.player = None;
+        }
+        let mut close_card = false;
+        if let Some(pl) = &mut self.player {
+            close_card = trackinfo::card(ctx, &self.tracks.items, self.track_view, pl);
+        }
+        if close_card {
+            self.player = None;
+        }
 
         if now - self.saved_at > 1.0 {
             self.saved_at = now;

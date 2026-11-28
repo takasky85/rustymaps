@@ -8,14 +8,88 @@ use std::sync::{Arc, Mutex};
 use eframe::egui::{self, Color32, Pos2, Stroke};
 
 use crate::camera::{vec_to_lonlat, Camera, V3};
+use crate::clean;
 use crate::kml;
+use crate::replay::Timeline;
 use crate::transit::circle_may_be_visible;
+
+/// Which version of the paths is drawn.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum View {
+    /// Exactly what the phone recorded.
+    Original,
+    /// The tidied copy (spikes removed, smoothed).
+    Cleaned,
+    /// The original, thin and faint, under the tidied one.
+    Both,
+}
+
+impl View {
+    pub const ALL: [(View, &'static str); 3] = [(View::Original, "Original"), (View::Cleaned, "Cleaned up"), (View::Both, "Both")];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            View::Original => "original",
+            View::Cleaned => "cleaned",
+            View::Both => "both",
+        }
+    }
+
+    pub fn from_key(k: &str) -> Option<View> {
+        View::ALL.iter().map(|v| v.0).find(|v| v.key() == k)
+    }
+
+    /// True when the tidied copy is what gets replayed and measured.
+    pub fn uses_clean(self) -> bool {
+        self != View::Original
+    }
+}
+
+/// The track that is selected (clicked), with its replay.
+pub struct Player {
+    /// Index into `TrackSet::items`.
+    pub item: usize,
+    /// Seconds of walking since the start.
+    pub u: f64,
+    pub playing: bool,
+    /// Replay speed: seconds of walk per second of watching.
+    pub mult: f64,
+    /// Keep the map centred on the walker while playing.
+    pub follow: bool,
+}
+
+pub const REPLAY_SPEEDS: [f64; 5] = [1.0, 10.0, 30.0, 100.0, 400.0];
+
+impl Player {
+    /// A new selection; the replay speed starts at the one that shows the whole walk in about 40 s.
+    pub fn new(item: usize, total_secs: f64) -> Player {
+        let want = total_secs / 40.0;
+        let mult = REPLAY_SPEEDS.iter().copied().min_by(|a, b| (a.ln() - want.max(1.0).ln()).abs().partial_cmp(&(b.ln() - want.max(1.0).ln()).abs()).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(10.0);
+        Player { item, u: 0.0, playing: false, mult, follow: true }
+    }
+
+    /// Moves the replay on by `dt` real seconds; stops at the end.
+    pub fn advance(&mut self, dt: f64, total_secs: f64) {
+        if self.playing {
+            self.u += dt * self.mult;
+            if self.u >= total_secs {
+                self.u = total_secs;
+                self.playing = false;
+            }
+        }
+    }
+}
 
 pub struct Track {
     pub name: String,
     /// File name inside the tracks folder.
     pub file: String,
     pub segs: Vec<Vec<V3>>,
+    /// The same stretches, tidied (see `clean`).
+    pub clean_segs: Vec<Vec<V3>>,
+    /// Clocks of the original and the tidied points.
+    pub orig: Timeline,
+    pub cleaned: Timeline,
     pub center: V3,
     /// Angular radius (radians) around `center` that holds every point.
     pub radius: f64,
@@ -24,6 +98,15 @@ pub struct Track {
 }
 
 impl Track {
+    /// The clock of the version being shown.
+    pub fn timeline(&self, view: View) -> &Timeline {
+        if view.uses_clean() {
+            &self.cleaned
+        } else {
+            &self.orig
+        }
+    }
+
     /// Longitude and latitude (degrees) of the middle of the track.
     pub fn lon_lat_deg(&self) -> (f64, f64) {
         let (lon, lat) = vec_to_lonlat(self.center);
@@ -61,7 +144,17 @@ fn build(p: kml::Parsed, file: &str) -> Track {
     let center = crate::camera::normalize([sum[0] / n, sum[1] / n, sum[2] / n]);
     let radius = p.segs.iter().flatten().map(|q| crate::camera::dot(center, *q).clamp(-1.0, 1.0).acos()).fold(0.0, f64::max).max(1e-6);
     let km = p.segs.iter().map(|s| kml::length_km(s)).sum();
-    Track { name: p.name, file: file.to_string(), segs: p.segs, center, radius, km, color: [0; 3] }
+    let mut clean_segs = Vec::new();
+    let mut clean_times = Vec::new();
+    for (i, s) in p.segs.iter().enumerate() {
+        let (c, t) = clean::clean(s, p.times.get(i).map_or(&[][..], |t| &t[..]));
+        clean_segs.push(c);
+        clean_times.push(t);
+    }
+    let span = kml::name_span_secs(&p.name);
+    let orig = Timeline::new(&p.segs, &p.times, span);
+    let cleaned = Timeline::new(&clean_segs, &clean_times, span);
+    Track { name: p.name, file: file.to_string(), segs: p.segs, clean_segs, orig, cleaned, center, radius, km, color: [0; 3] }
 }
 
 /// Reads one KML file into tracks (empty when it holds none).
@@ -77,10 +170,33 @@ fn is_kml(p: &Path) -> bool {
     p.extension().map_or(false, |e| e.to_string_lossy().eq_ignore_ascii_case("kml"))
 }
 
+/// Copies the `.kml` files of an older tracks folder that are not in `to` yet.
+fn adopt_old_files(from: &Path, to: &Path) {
+    if from == to {
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(from) else { return };
+    for e in rd.filter_map(|e| e.ok()) {
+        let p = e.path();
+        if is_kml(&p) {
+            if let Some(n) = p.file_name() {
+                let dest = to.join(n);
+                if !dest.exists() {
+                    let _ = std::fs::copy(&p, &dest);
+                }
+            }
+        }
+    }
+}
+
 impl TrackSet {
-    pub fn new(ctx: &egui::Context, data_dir: &Path) -> TrackSet {
+    /// `data_dir` is the permanent per-user folder. `legacy_dir` is the `data` folder next to the
+    /// program (every new build is unzipped with its own), whose `tracks` older versions used:
+    /// anything found there is copied over once.
+    pub fn new(ctx: &egui::Context, data_dir: &Path, legacy_dir: &Path) -> TrackSet {
         let dir = data_dir.join("tracks");
         let _ = std::fs::create_dir_all(&dir);
+        adopt_old_files(&legacy_dir.join("tracks"), &dir);
         let set = TrackSet { ctx: ctx.clone(), dir: dir.clone(), items: Vec::new(), incoming: Arc::new(Mutex::new(Vec::new())), message: String::new() };
         let incoming = set.incoming.clone();
         let ctx = ctx.clone();
@@ -170,62 +286,93 @@ fn dist_to_polyline(p: Pos2, pts: &[Pos2]) -> f32 {
     best
 }
 
-/// Draws the shown tracks. Returns a short caption for the track under `hover`, if any.
-pub fn draw(painter: &egui::Painter, rect: egui::Rect, cam: &Camera, zf: f64, items: &[Item], hover: Option<Pos2>) -> Option<String> {
+/// Screen polylines for the parts of `segs` that are in front of the globe.
+fn screen_runs(pr: &crate::camera::Projector, rect: egui::Rect, on_screen: egui::Rect, segs: &[Vec<V3>]) -> Vec<Vec<Pos2>> {
+    let mut runs: Vec<Vec<Pos2>> = Vec::new();
+    for seg in segs {
+        let mut run: Vec<Pos2> = Vec::new();
+        for &p in seg {
+            let s = if pr.visible(p) { pr.project(p).map(|s| rect.min + egui::vec2(s[0] as f32, s[1] as f32)) } else { None };
+            match s {
+                Some(s) => {
+                    if run.last().map_or(true, |l| l.distance(s) >= 0.8) {
+                        run.push(s);
+                    }
+                }
+                None => {
+                    if run.len() >= 2 {
+                        runs.push(std::mem::take(&mut run));
+                    }
+                    run.clear();
+                }
+            }
+        }
+        if run.len() >= 2 {
+            runs.push(run);
+        }
+    }
+    runs.retain(|r| {
+        let (mut lo, mut hi) = (r[0], r[0]);
+        for p in r {
+            lo = lo.min(*p);
+            hi = hi.max(*p);
+        }
+        egui::Rect::from_min_max(lo, hi).intersects(on_screen)
+    });
+    runs
+}
+
+/// What `draw` found under the pointer.
+#[derive(Default)]
+pub struct Out {
+    /// A caption for the track under the mouse.
+    pub caption: Option<String>,
+    /// The track under the mouse (index into the items).
+    pub hover: Option<usize>,
+    /// The track under the click, when there was one.
+    pub click: Option<usize>,
+}
+
+/// Draws the shown tracks. `hover` and `click` are screen positions to test against the paths.
+pub fn draw(painter: &egui::Painter, rect: egui::Rect, cam: &Camera, zf: f64, items: &[Item], view: View, selected: Option<usize>, hover: Option<Pos2>, click: Option<Pos2>) -> Out {
+    let mut out = Out::default();
     if zf < 4.0 {
-        return None;
+        return out;
     }
     let (w, h) = (rect.width() as f64, rect.height() as f64);
     let pr = cam.projector(w, h);
     let on_screen = rect.expand(60.0);
     let width = (2.6 + (zf - 6.0) * 0.4).clamp(2.6, 6.0) as f32;
-    let mut caption: Option<(f32, String)> = None;
-    for it in items.iter().filter(|i| i.shown) {
+    let mut best_hover: Option<(f32, usize)> = None;
+    let mut best_click: Option<(f32, usize)> = None;
+    let reach = (width * 0.5 + 6.0).max(8.0);
+    for (idx, it) in items.iter().enumerate().filter(|(_, i)| i.shown) {
         let t = &it.track;
         if !circle_may_be_visible(cam, t.center, t.radius, w / h) {
             continue;
         }
         let col = Color32::from_rgb(t.color[0], t.color[1], t.color[2]);
-        let mut runs: Vec<Vec<Pos2>> = Vec::new();
-        for seg in &t.segs {
-            let mut run: Vec<Pos2> = Vec::new();
-            for &p in seg {
-                let s = if pr.visible(p) { pr.project(p).map(|s| rect.min + egui::vec2(s[0] as f32, s[1] as f32)) } else { None };
-                match s {
-                    Some(s) => {
-                        if run.last().map_or(true, |l| l.distance(s) >= 0.8) {
-                            run.push(s);
-                        }
-                    }
-                    None => {
-                        if run.len() >= 2 {
-                            runs.push(std::mem::take(&mut run));
-                        }
-                        run.clear();
-                    }
-                }
-            }
-            if run.len() >= 2 {
-                runs.push(run);
-            }
+        let is_sel = selected == Some(idx);
+        let main_segs = if view.uses_clean() { &t.clean_segs } else { &t.segs };
+        let runs = screen_runs(&pr, rect, on_screen, main_segs);
+        let faint = if view == View::Both { screen_runs(&pr, rect, on_screen, &t.segs) } else { Vec::new() };
+        let mut probe: Vec<&Vec<Pos2>> = runs.iter().collect();
+        // the original, thin and see-through, under the tidied one
+        for r in &faint {
+            painter.add(egui::Shape::line(r.clone(), Stroke::new((width * 0.55).max(1.6), Color32::from_rgba_unmultiplied(t.color[0], t.color[1], t.color[2], 120))));
+            probe.push(r);
         }
-        runs.retain(|r| {
-            let (mut lo, mut hi) = (r[0], r[0]);
-            for p in r {
-                lo = lo.min(*p);
-                hi = hi.max(*p);
-            }
-            egui::Rect::from_min_max(lo, hi).intersects(on_screen)
-        });
+        let casing = if is_sel { width + 6.0 } else { width + 2.4 };
+        let casing_col = if is_sel { Color32::from_rgba_unmultiplied(255, 255, 255, 255) } else { Color32::from_rgba_unmultiplied(255, 255, 255, 215) };
         for r in &runs {
-            painter.add(egui::Shape::line(r.clone(), Stroke::new(width + 2.4, Color32::from_rgba_unmultiplied(255, 255, 255, 215))));
+            painter.add(egui::Shape::line(r.clone(), Stroke::new(casing, casing_col)));
         }
         for r in &runs {
-            painter.add(egui::Shape::line(r.clone(), Stroke::new(width, col)));
+            painter.add(egui::Shape::line(r.clone(), Stroke::new(width + if is_sel { 1.0 } else { 0.0 }, col)));
         }
         // start (green) and end (red), once the track is big enough on screen to matter
         if zf >= 9.0 {
-            let ends = [(t.segs.first().and_then(|s| s.first()), Color32::from_rgb(46, 204, 113)), (t.segs.last().and_then(|s| s.last()), Color32::from_rgb(231, 76, 60))];
+            let ends = [(main_segs.first().and_then(|s| s.first()), Color32::from_rgb(46, 204, 113)), (main_segs.last().and_then(|s| s.last()), Color32::from_rgb(231, 76, 60))];
             for (p, c) in ends {
                 if let Some(&p) = p {
                     if pr.visible(p) {
@@ -239,14 +386,38 @@ pub fn draw(painter: &egui::Painter, rect: egui::Rect, cam: &Camera, zf: f64, it
                 }
             }
         }
-        if let Some(hp) = hover {
-            let d = runs.iter().map(|r| dist_to_polyline(hp, r)).fold(f32::INFINITY, f32::min);
-            if d <= (width * 0.5 + 6.0).max(8.0) && caption.as_ref().map_or(true, |c| d < c.0) {
-                caption = Some((d, format!("{}  ·  {:.1} km", t.name, t.km)));
+        for (at, best) in [(hover, &mut best_hover), (click, &mut best_click)] {
+            if let Some(p) = at {
+                let d = probe.iter().map(|r| dist_to_polyline(p, r)).fold(f32::INFINITY, f32::min);
+                if d <= reach && best.as_ref().map_or(true, |b| d < b.0) {
+                    *best = Some((d, idx));
+                }
             }
         }
     }
-    caption.map(|c| c.1)
+    if let Some((_, i)) = best_hover {
+        let t = &items[i].track;
+        out.caption = Some(format!("{}  ·  {:.1} km  ·  click for details and replay", t.name, t.km));
+        out.hover = Some(i);
+    }
+    out.click = best_click.map(|b| b.1);
+    out
+}
+
+/// The walker during a replay: a pulsing dot on the path.
+pub fn draw_marker(painter: &egui::Painter, rect: egui::Rect, cam: &Camera, pos: V3, color: [u8; 3], now: f64) {
+    let pr = cam.projector(rect.width() as f64, rect.height() as f64);
+    if !pr.visible(pos) {
+        return;
+    }
+    if let Some(s) = pr.project(pos) {
+        let s = rect.min + egui::vec2(s[0] as f32, s[1] as f32);
+        if rect.expand(30.0).contains(s) {
+            let pulse = (now * 3.0).sin() as f32 * 0.5 + 0.5;
+            painter.circle_filled(s, 13.0 + 4.0 * pulse, Color32::from_rgba_unmultiplied(color[0], color[1], color[2], 70));
+            painter.circle(s, 7.0, Color32::from_rgb(color[0], color[1], color[2]), Stroke::new(3.0_f32, Color32::WHITE));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -259,7 +430,7 @@ mod tests {
     fn a_newer_copy_of_a_file_replaces_the_old_one_in_place() {
         let dir = std::env::temp_dir().join(format!("rmaps-tracks-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let mut set = TrackSet::new(&egui::Context::default(), &dir);
+        let mut set = TrackSet::new(&egui::Context::default(), &dir, &dir);
         std::fs::write(set.dir().join("Phone_2026-11-28.kml"), KML).unwrap();
         set.reload_file("Phone_2026-11-28.kml");
         std::fs::write(set.dir().join("Other.kml"), KML).unwrap();
@@ -272,6 +443,35 @@ mod tests {
         assert_eq!(set.items.len(), 2, "replaced, not added");
         assert_eq!(set.items[0].track.name, "Longer walk");
         assert!(!set.items[0].shown && set.items[0].track.color == color, "keeps what the user chose");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const TIMED: &str = "<kml><Placemark><name>Run 10:00-10:01</name><gx:Track>\
+        <when>2026-11-28T18:00:00Z</when><when>2026-11-28T18:00:10Z</when><when>2026-11-28T18:00:20Z</when>\
+        <gx:coord>-122.3000 37.9000 0</gx:coord><gx:coord>-122.2990 37.9000 0</gx:coord><gx:coord>-122.2980 37.9000 0</gx:coord>\
+        </gx:Track></Placemark></kml>";
+
+    #[test]
+    fn a_timed_file_replays_with_real_speeds_and_an_untimed_one_with_an_estimate() {
+        use crate::replay::Timing;
+        let dir = std::env::temp_dir().join(format!("rmaps-tracks-time-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut set = TrackSet::new(&egui::Context::default(), &dir, &dir);
+        std::fs::write(set.dir().join("Timed.kml"), TIMED).unwrap();
+        set.reload_file("Timed.kml");
+        let old = "<kml><Placemark><name>Walk 10:00-10:01</name><LineString><coordinates>-122.3000,37.9000 -122.2990,37.9000 -122.2980,37.9000</coordinates></LineString></Placemark></kml>";
+        std::fs::write(set.dir().join("Old.kml"), old).unwrap();
+        set.reload_file("Old.kml");
+        assert_eq!(set.items.len(), 2);
+        let t = &set.items[0].track;
+        assert_eq!(t.orig.timing, Timing::Exact);
+        assert!((t.orig.total_secs() - 20.0).abs() < 1e-9);
+        assert!(t.orig.max_ms() > 5.0 && t.orig.max_ms() < 12.0, "{}", t.orig.max_ms());
+        assert_eq!(t.cleaned.timing, Timing::Exact);
+        // no per-point times, but the name says 10:00-10:01: one minute, spread evenly
+        let o = &set.items[1].track;
+        assert_eq!(o.orig.timing, Timing::Estimated);
+        assert!((o.orig.total_secs() - 60.0).abs() < 1e-9);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

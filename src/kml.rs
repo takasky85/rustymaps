@@ -8,6 +8,9 @@ use crate::camera::{dot, lonlat_to_vec, V3};
 pub struct Parsed {
     pub name: String,
     pub segs: Vec<Vec<V3>>,
+    /// For each stretch, the time of every point in seconds since 1970 (UTC); empty when the file
+    /// gave no times for that stretch.
+    pub times: Vec<Vec<f64>>,
 }
 
 /// Points closer than this to the previous kept one are dropped (GPS jitter while standing still).
@@ -57,23 +60,95 @@ fn point(lon: f64, lat: f64) -> Option<V3> {
     (lon.is_finite() && lat.is_finite() && lon.abs() <= 180.0 && lat.abs() <= 90.0).then(|| lonlat_to_vec(lon.to_radians(), lat.to_radians()))
 }
 
-/// Keeps a point only when it is some metres from the last one kept.
-fn thin(points: Vec<V3>) -> Vec<V3> {
+/// Keeps a point only when it is some metres from the last one kept (its time, if any, goes with it).
+fn thin(points: Vec<V3>, times: Vec<f64>) -> (Vec<V3>, Vec<f64>) {
     let min = MIN_STEP_M / EARTH_M;
     let min_chord2 = min * min;
+    let timed = times.len() == points.len();
     let mut out: Vec<V3> = Vec::with_capacity(points.len());
-    for p in points {
+    let mut out_t: Vec<f64> = Vec::new();
+    for (i, p) in points.into_iter().enumerate() {
         match out.last() {
             Some(&l) if 2.0 - 2.0 * dot(l, p) < min_chord2 => {}
-            _ => out.push(p),
+            _ => {
+                out.push(p);
+                if timed {
+                    out_t.push(times[i]);
+                }
+            }
         }
     }
-    out
+    (out, out_t)
+}
+
+/// Days from 1970-01-01 to a calendar date (proleptic Gregorian).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// "2026-11-28T12:00:05Z" (also with fractions of a second, a space instead of T, or a +hh:mm
+/// offset) as seconds since 1970 UTC.
+pub fn parse_time(text: &str) -> Option<f64> {
+    let t = text.trim();
+    if !t.is_ascii() || t.len() < 19 {
+        return None;
+    }
+    let num = |a: usize, b: usize| t.get(a..b)?.parse::<i64>().ok();
+    let b = t.as_bytes();
+    if b[4] != b'-' || b[7] != b'-' || (b[10] != b'T' && b[10] != b' ') || b[13] != b':' || b[16] != b':' {
+        return None;
+    }
+    let (y, mo, d, h, mi, sec) = (num(0, 4)?, num(5, 7)?, num(8, 10)?, num(11, 13)?, num(14, 16)?, num(17, 19)?);
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || sec > 60 {
+        return None;
+    }
+    let mut rest = &t[19..];
+    let mut frac = 0.0;
+    if let Some(r) = rest.strip_prefix('.') {
+        let n = r.bytes().take_while(|c| c.is_ascii_digit()).count();
+        frac = format!("0.{}", &r[..n]).parse::<f64>().unwrap_or(0.0);
+        rest = &r[n..];
+    }
+    let mut offset = 0i64;
+    if rest.starts_with('+') || rest.starts_with('-') {
+        let sign = if rest.starts_with('-') { -1 } else { 1 };
+        let digits: String = rest[1..].chars().filter(|c| c.is_ascii_digit()).collect();
+        if digits.len() >= 2 {
+            let oh = digits[..2].parse::<i64>().ok()?;
+            let om = if digits.len() >= 4 { digits[2..4].parse::<i64>().ok()? } else { 0 };
+            offset = sign * (oh * 3600 + om * 60);
+        }
+    }
+    Some((days_from_civil(y, mo, d) * 86_400 + h * 3600 + mi * 60 + sec - offset) as f64 + frac)
+}
+
+/// How long a track lasted, from a name like "Track 2 14:05-14:32" (what the phone tracker writes):
+/// 27 minutes in seconds. Wraps past midnight; `None` when the name has no such range.
+pub fn name_span_secs(name: &str) -> Option<f64> {
+    let b = name.as_bytes();
+    let d = |i: usize| b.get(i).map_or(false, |c| c.is_ascii_digit());
+    let n = |i: usize| ((b[i] - b'0') * 10 + (b[i + 1] - b'0')) as i64;
+    for i in 0..b.len().saturating_sub(10) {
+        if d(i) && d(i + 1) && b[i + 2] == b':' && d(i + 3) && d(i + 4) && b[i + 5] == b'-' && d(i + 6) && d(i + 7) && b[i + 8] == b':' && d(i + 9) && d(i + 10) {
+            let (a, z) = (n(i) * 60 + n(i + 3), n(i + 6) * 60 + n(i + 9));
+            if n(i) > 23 || n(i + 6) > 23 || n(i + 3) > 59 || n(i + 9) > 59 {
+                continue;
+            }
+            let mins = if z >= a { z - a } else { z + 1440 - a };
+            return (mins > 0).then_some(mins as f64 * 60.0);
+        }
+    }
+    None
 }
 
 fn block(text: &str, fallback: &str) -> Option<Parsed> {
     let name = element(text, "name", 0).map(|(n, _)| unescape(n)).filter(|n| !n.is_empty()).unwrap_or_else(|| fallback.to_string());
-    let mut segs: Vec<Vec<V3>> = Vec::new();
+    let mut stretches: Vec<(Vec<V3>, Vec<f64>)> = Vec::new();
     // <coordinates>lon,lat[,alt] lon,lat[,alt] ...</coordinates>
     let mut at = 0;
     while let Some((inner, next)) = element(text, "coordinates", at) {
@@ -87,26 +162,52 @@ fn block(text: &str, fallback: &str) -> Option<Parsed> {
                 point(lon, lat)
             })
             .collect();
-        segs.push(thin(pts));
+        stretches.push(thin(pts, Vec::new()));
     }
-    // <gx:Track> ... <gx:coord>lon lat alt</gx:coord> ... </gx:Track>
+    // <gx:Track> ... <when>time</when> ... <gx:coord>lon lat alt</gx:coord> ... </gx:Track>
     let mut at = 0;
     while let Some((track, next)) = element(text, "gx:Track", at) {
         at = next;
-        let mut pts: Vec<V3> = Vec::new();
+        let mut whens: Vec<Option<f64>> = Vec::new();
+        let mut w = 0;
+        while let Some((inner, n2)) = element(track, "when", w) {
+            w = n2;
+            whens.push(parse_time(inner));
+        }
+        let mut coords: Vec<Option<V3>> = Vec::new();
         let mut c = 0;
         while let Some((inner, n2)) = element(track, "gx:coord", c) {
             c = n2;
             let mut it = inner.split_whitespace();
-            if let (Some(lon), Some(lat)) = (it.next().and_then(|v| v.parse::<f64>().ok()), it.next().and_then(|v| v.parse::<f64>().ok())) {
-                pts.extend(point(lon, lat));
+            let lon = it.next().and_then(|v| v.parse::<f64>().ok());
+            let lat = it.next().and_then(|v| v.parse::<f64>().ok());
+            coords.push(lon.zip(lat).and_then(|(lon, lat)| point(lon, lat)));
+        }
+        // times belong to coordinates one for one; if the counts differ the times are not trusted
+        let timed = whens.len() == coords.len() && whens.iter().all(|t| t.is_some());
+        let mut pts: Vec<V3> = Vec::new();
+        let mut times: Vec<f64> = Vec::new();
+        for (i, p) in coords.into_iter().enumerate() {
+            if let Some(p) = p {
+                pts.push(p);
+                if timed {
+                    times.push(whens[i].unwrap_or(0.0));
+                }
             }
         }
-        segs.push(thin(pts));
+        // a clock that runs backwards cannot be a track's times
+        if times.windows(2).any(|w| w[1] < w[0]) {
+            times.clear();
+        }
+        stretches.push(thin(pts, times));
     }
     // a single point is a waypoint, not a track
-    segs.retain(|s| s.len() >= 2);
-    (!segs.is_empty()).then_some(Parsed { name, segs })
+    stretches.retain(|s| s.0.len() >= 2);
+    if stretches.is_empty() {
+        return None;
+    }
+    let (segs, times): (Vec<_>, Vec<_>) = stretches.into_iter().unzip();
+    Some(Parsed { name, segs, times })
 }
 
 /// Every track in a KML document. `fallback` names tracks that have no name of their own.
@@ -173,6 +274,28 @@ mod tests {
         // second one has no name: falls back; the out-of-range longitude is skipped
         assert_eq!(t[1].name, "file");
         assert_eq!(t[1].segs[0].len(), 2);
+    }
+
+    #[test]
+    fn times_come_with_their_points() {
+        let t = parse(DOC, "file");
+        assert!(t[0].times[0].is_empty(), "a LineString has no times");
+        // the bad longitude's time is dropped together with its point
+        assert_eq!(t[1].times[0].len(), t[1].segs[0].len());
+        assert_eq!(t[1].times[0], vec![1_795_867_200.0, 1_795_867_205.0]);
+        assert_eq!(parse_time("1970-01-01T00:00:00Z"), Some(0.0));
+        assert_eq!(parse_time("2000-03-01T00:00:00Z"), Some(951_868_800.0));
+        assert_eq!(parse_time("2026-11-28T05:00:00-07:00"), parse_time("2026-11-28T12:00:00Z"));
+        assert_eq!(parse_time("2026-11-28T12:00:00.5Z"), Some(1_795_867_200.5));
+        assert_eq!(parse_time("yesterday"), None);
+    }
+
+    #[test]
+    fn a_track_name_with_a_time_range_gives_its_duration() {
+        assert_eq!(name_span_secs("Track 1 14:05-14:32"), Some(27.0 * 60.0));
+        assert_eq!(name_span_secs("Track 2 23:50-00:10"), Some(20.0 * 60.0));
+        assert_eq!(name_span_secs("Belgum Trail"), None);
+        assert_eq!(name_span_secs("Track 3 09:00-09:00"), None);
     }
 
     #[test]
