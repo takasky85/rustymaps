@@ -61,7 +61,7 @@ impl TransitManager {
                 offline: tmap_path(&data_dir, c.id).is_file(),
             })
             .collect();
-        let order = (0..slots.len()).collect();
+        let order: Vec<usize> = (0..slots.len()).collect();
         TransitManager { ctx: ctx.clone(), dir: data_dir, slots, order }
     }
 
