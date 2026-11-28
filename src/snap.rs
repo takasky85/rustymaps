@@ -14,10 +14,14 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use crate::camera::{lonlat_to_vec, vec_to_lonlat, V3};
 
 const EARTH_M: f64 = 6_371_000.0;
-/// A fix is only snapped to a street at most this far away.
-const RADIUS_M: f64 = 30.0;
+/// A fix is only snapped to a street at most this far away. Between tall buildings a phone is
+/// easily 40 m out while still calling the fix accurate.
+const RADIUS_M: f64 = 50.0;
 /// How far a fix is expected to be off, typically (metres).
-const SIGMA_M: f64 = 15.0;
+const SIGMA_M: f64 = 20.0;
+/// A run of this many fixes (or fewer) with no street in reach, between two fixes that were put on
+/// streets, is a glitch and is dropped; a longer run is a real walk across a park or plaza.
+const STRAY_RUN: usize = 2;
 /// How much a mismatch between walked and straight-line distance costs (metres per unit).
 const BETA_M: f64 = 8.0;
 /// Candidates kept per fix.
@@ -377,6 +381,26 @@ pub fn snap_ranked(points: &[V3], times: &[f64], roads: &[Vec<V3>], ranks: &[u8]
         cur = back[i][k];
     }
 
+    // fixes with no street in reach that sit between snapped fixes are glitches, not a park
+    let mut stray = vec![false; n];
+    let mut i = 0;
+    while i < n {
+        if chosen[i].is_some() {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < n && chosen[j].is_none() {
+            j += 1;
+        }
+        if i > 0 && j < n && j - i <= STRAY_RUN {
+            for s in &mut stray[i..j] {
+                *s = true;
+            }
+        }
+        i = j;
+    }
+
     // --- build the output: snapped fixes with the streets' corners between them ----------------
     let mut pts: Vec<V3> = Vec::with_capacity(n + n / 4);
     let mut out_t: Vec<f64> = Vec::new();
@@ -391,8 +415,10 @@ pub fn snap_ranked(points: &[V3], times: &[f64], roads: &[Vec<V3>], ranks: &[u8]
     for i in 0..n {
         let t_i = if timed { times[i] } else { 0.0 };
         let Some(k) = chosen[i] else {
-            push(&mut pts, &mut out_t, points[i], t_i);
-            prev_matched = None;
+            if !stray[i] {
+                push(&mut pts, &mut out_t, points[i], t_i);
+                prev_matched = None;
+            }
             continue;
         };
         matched += 1;
@@ -424,6 +450,34 @@ pub fn snap_ranked(points: &[V3], times: &[f64], roads: &[Vec<V3>], ranks: &[u8]
     for j in 1..pts.len() {
         if dist(plane.xy(pts[j]), plane.xy(pts[j - 1])) < 0.3 {
             keep[j] = false;
+        }
+    }
+    // a fix that jumps out along a street and straight back is noise too (a lagging phone)
+    let mut last_kept = 0;
+    for j in 1..pts.len().saturating_sub(1) {
+        if !keep[j] {
+            continue;
+        }
+        let next = (j + 1..pts.len()).find(|&k| keep[k]);
+        let Some(next) = next else { break };
+        let (a, b, c) = (plane.xy(pts[last_kept]), plane.xy(pts[j]), plane.xy(pts[next]));
+        let (detour, direct) = (dist(a, b) + dist(b, c), dist(a, c));
+        if detour > 10.0 && detour > 2.0 * direct + 6.0 {
+            // which of the two is the odd one out, this fix or the next? drop the one whose
+            // removal leaves the shorter path
+            let after = (next + 1..pts.len()).find(|&k| keep[k]);
+            let drop_next = after.map_or(false, |d| {
+                let d = plane.xy(pts[d]);
+                dist(a, b) + dist(b, d) < dist(a, c) + dist(c, d)
+            });
+            if drop_next {
+                keep[next] = false;
+                last_kept = j;
+            } else {
+                keep[j] = false;
+            }
+        } else {
+            last_kept = j;
         }
     }
     let pts_f: Vec<V3> = pts.iter().zip(&keep).filter(|(_, k)| **k).map(|(p, _)| *p).collect();
@@ -597,5 +651,69 @@ mod tests {
         let near: Vec<V3> = (0..20).map(|i| at(i as f64 * 5.0, 5.0)).collect();
         let s = snap_ranked(&near, &[], &roads, &ranks, 1.0);
         assert!(s.pts.iter().all(|p| off_line(*p, &roads[0]) < 1.0));
+    }
+
+    #[test]
+    fn a_fix_far_off_between_two_good_ones_is_dropped() {
+        // along the south street, with one fix 90 m north of it (no street in reach there)
+        let mut pts: Vec<V3> = (0..6).map(|i| at(i as f64 * 8.0, 3.0)).collect();
+        pts.push(at(48.0, -90.0));
+        pts.extend((7..12).map(|i| at(i as f64 * 8.0, 3.0)));
+        let s = snap(&pts, &[], &block());
+        assert_eq!(s.matched, 11);
+        assert!(s.pts.iter().all(|p| off_line(*p, &block()[0]) < 1.0), "no spike left");
+    }
+
+    #[test]
+    fn a_long_stretch_off_the_streets_is_kept() {
+        let mut pts: Vec<V3> = (0..4).map(|i| at(i as f64 * 8.0, 3.0)).collect();
+        pts.extend((0..6).map(|i| at(40.0 + i as f64 * 8.0, -90.0)));
+        pts.extend((0..4).map(|i| at(90.0 + i as f64 * 8.0, 3.0)));
+        let s = snap(&pts, &[], &block());
+        assert_eq!(s.pts.iter().filter(|p| off_line(**p, &block()[0]) > 50.0).count(), 6, "the 6 fixes of the plaza walk stay");
+    }
+
+    #[test]
+    fn a_lagging_fix_that_jumps_back_along_the_street_is_dropped() {
+        let xs = [0.0, 10.0, 20.0, 30.0, 12.0, 31.0, 40.0, 50.0];
+        let pts: Vec<V3> = xs.iter().map(|&x| at(x, 2.0)).collect();
+        let s = snap(&pts, &[], &block());
+        let east: Vec<f64> = s.pts.iter().map(|p| crate::clean::dist_m(*p, at(0.0, 0.0))).collect();
+        assert!(east.windows(2).all(|w| w[1] >= w[0] - 0.5), "{east:?}: still moves forward");
+    }
+
+    /// A real walk round a block in San Francisco (29 fixes in 9 minutes, a few of them 40 m or more
+    /// out between tall buildings), with the block's four streets and an alley through the middle
+    /// rebuilt from a map, in metres from the test origin.
+    #[test]
+    fn a_real_sparse_walk_between_tall_buildings_follows_the_four_streets() {
+        const FIX: [(f64, f64); 29] = [
+            (-241.0, 24.0), (-228.0, 3.0), (-250.0, -2.0), (-234.0, -15.0), (-220.0, -33.0), (-212.0, -28.0), (-176.0, -79.0), (-169.0, -71.0), (-161.0, -64.0), (-156.0, -57.0),
+            (-154.0, -48.0), (-154.0, -44.0), (-50.0, -2.0), (-37.0, 6.0), (-24.0, 17.0), (-11.0, 30.0), (-3.0, 35.0), (14.0, 59.0), (15.0, 60.0), (22.0, 86.0),
+            (13.0, 98.0), (-1.0, 136.0), (3.0, 116.0), (-4.0, 130.0), (-109.0, 156.0), (-94.0, 121.0), (-101.0, 114.0), (-121.0, 103.0), (-159.0, 76.0),
+        ];
+        let (w, b, e, n) = ((-250.0, -4.0), (-175.0, -79.0), (6.0, 102.0), (-69.0, 177.0));
+        let line = |pts: &[(f64, f64)]| -> Vec<V3> { pts.iter().map(|p| at(p.0, p.1)).collect() };
+        let ext = |p: (f64, f64), d: (f64, f64)| (p.0 + d.0 * 80.0, p.1 + d.1 * 80.0);
+        let (se, ne) = ((0.707, -0.707), (0.707, 0.707));
+        let neg = |d: (f64, f64)| (-d.0, -d.1);
+        let streets = vec![
+            line(&[ext(w, neg(se)), w, b, ext(b, se)]),
+            line(&[ext(b, neg(ne)), b, e, ext(e, ne)]),
+            line(&[ext(e, se), e, n, ext(n, neg(se))]),
+            line(&[ext(n, ne), n, w, ext(w, neg(ne))]),
+            line(&[(-213.0, -41.0), (-32.0, 140.0)]),
+        ];
+        let ranks = [1, 1, 1, 1, 2];
+        let pts: Vec<V3> = FIX.iter().map(|&(x, y)| at(x, y)).collect();
+        let s = snap_ranked(&pts, &[], &streets, &ranks, 1.0);
+        assert_eq!(s.matched, 29);
+        let worst = s.pts.iter().map(|p| streets[..4].iter().map(|r| off_line(*p, r)).fold(f64::INFINITY, f64::min)).fold(0.0, f64::max);
+        assert!(worst < 1.5, "{worst} m off the four streets (the alley is not used)");
+        // the four corners are all passed
+        for c in [w, b, e, n] {
+            let near = s.pts.iter().map(|p| metres(*p, at(c.0, c.1))).fold(f64::INFINITY, f64::min);
+            assert!(near < 3.0, "corner {c:?} missed by {near} m");
+        }
     }
 }
