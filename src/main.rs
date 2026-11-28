@@ -8,6 +8,7 @@
 mod camera;
 mod data;
 mod flight;
+mod fly;
 mod fonts;
 mod globe;
 mod gpu;
@@ -29,6 +30,7 @@ use std::sync::Arc;
 use eframe::{egui, egui_wgpu, wgpu};
 
 use camera::{dot, merc_to_vec, Camera, Projector, MAX_ALT, MIN_ALT, V3};
+use fly::{Fly, FLY_SPEEDS};
 use flight::{AircraftDef, Route, Sim, AIRCRAFT};
 use gpu::{Globals, MapCallback};
 use plane::{PlaneCallback, PlaneDraw};
@@ -155,17 +157,6 @@ fn main() -> eframe::Result {
     result
 }
 
-/// A smooth camera move between two views. Long trips climb towards a globe view in the middle and
-/// settle back down at the destination.
-struct Fly {
-    from: Camera,
-    to: Camera,
-    start: f64,
-    duration: f64,
-    /// Highest altitude (planet radii) reached on the way.
-    peak: f64,
-}
-
 /// Playback speeds for the simulated flights (multiples of real time).
 const SPEEDS: [(&str, f64); 4] = [("real time", 1.0), ("60x", 60.0), ("600x", 600.0), ("3600x", 3600.0)];
 
@@ -238,6 +229,8 @@ struct App {
     flat_stations: bool,
     show_trains: bool,
     train_speed: usize,
+    /// Index into FLY_SPEEDS.
+    fly_speed: usize,
     /// Index into BACKENDS; used the next time the app starts.
     backend: usize,
     /// Frame rate of animations (planes, trains) when nothing else is happening.
@@ -368,6 +361,7 @@ impl App {
             show_trains: true,
             train_speed: 0,
             backend: 0,
+            fly_speed: 1,
             anim_fps: 60,
             last_anim: 0.0,
             labels_shown: Default::default(),
@@ -400,16 +394,18 @@ impl App {
         app
     }
 
-    /// Smooth move to `to`. Far destinations zoom out towards a globe view first and zoom back in
-    /// as the destination gets close; `min_duration` is for short hops.
+    /// Smooth move to `to` (see `Fly`). `min_duration` is a rough floor for short hops; the Fly speed
+    /// setting scales everything, and "Jump" goes straight there.
     fn fly_to(&mut self, to: Camera, now: f64, min_duration: f64) {
         self.follow = None;
-        let dist = dot(self.cam.dir(), to.dir()).clamp(-1.0, 1.0).acos();
-        let hi = self.cam.alt.max(to.alt);
-        let peak = (dist * 4.0).min(2.4).max(hi);
-        // long trips take their time, and the last part (coming down) is the slowest
-        let duration = (min_duration + dist * 3.8).min(13.0);
-        self.fly = Some(Fly { from: self.cam, to, start: now, duration, peak });
+        let secs = FLY_SPEEDS[self.fly_speed.min(FLY_SPEEDS.len() - 1)].1;
+        if secs <= 0.0 {
+            self.cam = to;
+            self.cam.normalize();
+            self.fly = None;
+            return;
+        }
+        self.fly = Some(Fly::new(self.cam, to, now, min_duration, secs));
     }
 
     fn goto_city(&mut self, lon: f64, lat: f64, now: f64) {
@@ -444,29 +440,8 @@ impl App {
 
     fn step_fly(&mut self, now: f64) -> bool {
         let Some(f) = &self.fly else { return false };
-        let t = ((now - f.start) / f.duration).clamp(0.0, 1.0);
-        let e = t * t * (3.0 - 2.0 * t);
-        let pe = e * e * (3.0 - 2.0 * e); // the ground moves most while we are high up
-        let dlon = camera::wrap_pi(f.to.lon - f.from.lon);
-        let (la0, la1) = (f.from.alt.ln(), f.to.alt.ln());
-        let lp = f.peak.ln().max(la0).max(la1);
-        // Climb in the first part of the trip, stay high while the ground slides by, and only come
-        // down once the destination is nearly under us: the zoom-in stays gentle and late.
-        let smooth = |x: f64| {
-            let x = x.clamp(0.0, 1.0);
-            x * x * (3.0 - 2.0 * x)
-        };
-        let up = smooth(pe / 0.3);
-        let down = smooth((pe - 0.62) / 0.38);
-        let ln_alt = la0 + (lp - la0) * up + (la1 - lp) * down;
-        self.cam = Camera {
-            lon: f.from.lon + dlon * pe,
-            lat: f.from.lat + (f.to.lat - f.from.lat) * pe,
-            alt: ln_alt.exp(),
-            pitch: f.from.pitch + (f.to.pitch - f.from.pitch) * e,
-            heading: f.from.heading + camera::wrap_pi(f.to.heading - f.from.heading) * e,
-            shift: [f.from.shift[0] + (f.to.shift[0] - f.from.shift[0]) * e, f.from.shift[1] + (f.to.shift[1] - f.from.shift[1]) * e],
-        };
+        let t = ((now - f.start) / f.duration.max(1e-3)).clamp(0.0, 1.0);
+        self.cam = if t >= 1.0 { f.to } else { f.camera(t) };
         self.cam.normalize();
         if t >= 1.0 {
             self.fly = None;

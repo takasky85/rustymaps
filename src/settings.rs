@@ -78,6 +78,7 @@ impl App {
         s.set("anim_fps", self.anim_fps);
         s.set("train_speed", self.train_speed);
         s.set("backend", self.backend);
+        s.set("fly_speed", self.fly_speed);
         s.set("cache_mb", crate::tiles::cache_cap_mb());
         s.set("ui_size", self.ui_size);
         s.set("bilingual", self.bilingual);
@@ -135,6 +136,9 @@ impl App {
         }
         if let Some(v) = s.get::<usize>("train_speed") {
             self.train_speed = v.min(crate::TRAIN_SPEEDS.len() - 1);
+        }
+        if let Some(v) = s.get::<usize>("fly_speed") {
+            self.fly_speed = v.min(crate::fly::FLY_SPEEDS.len() - 1);
         }
         if let Some(v) = s.get::<usize>("backend") {
             self.backend = v.min(crate::BACKENDS.len() - 1);

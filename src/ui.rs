@@ -152,6 +152,12 @@ impl App {
             }
             ui.add(egui::TextEdit::singleline(&mut self.places_filter).hint_text("Search places…").desired_width(ui.available_width()));
         });
+        ui.horizontal(|ui| {
+            ui.label("Fly");
+            for (i, (name, _)) in crate::fly::FLY_SPEEDS.iter().enumerate() {
+                ui.selectable_value(&mut self.fly_speed, i, *name);
+            }
+        });
         ui.separator();
 
         let q = self.places_filter.trim().to_lowercase();
