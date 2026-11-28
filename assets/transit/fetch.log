@@ -1,15 +1,41 @@
 shinkansen: attempt 1
-shinkansen: ok, 11 lines, 66 stations, 44964 points, 5 MB downloaded
+shinkansen: overpass-api.de: HTTP 502 # 502 Gateway Timeout This Overpass API server is currently at capacity. All query workers are busy and the request queue is full. ## What to do Retry your requ | overpass.private.coffee: network error: timeout: global | overpass.kumi.systems: HTTP 504 <?xml version="1.0" encoding="UTF-8"?> <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"> <html xmlns
+shinkansen: attempt 2
+shinkansen: ok, 35 lines, 127 stations, 169780 points, 17 MB downloaded
+    Kamome                       badge     #dc861e  16 paths
+    JR Shinkansen (Hayate Train) badge     #1edc70  7 paths
+    JR Shinkansen (Komachi Train) badge     #1e50dc  8 paths
+    Toki                         badge     #1eccdc  1 paths
     JR Shinkansen (Tsubasa Train) badge     #cc1edc  15 paths
     Tohoku Shinkansen (outbound) badge     #dc3a1e  3 paths
     Tohoku Shinkansen (inbound)  badge     #1eafdc  3 paths
                                  badge     #dc1e21  0 paths
+    Nozomi                       badge     #1edc24  2 paths
     Kodama (Shin-Osaka => Tokyo) badge     #bf1edc  1 paths
     Kodama (Tokyo => Shin-Osaka) badge     #dc1ea6  1 paths
+    Nozomi (Hakata => Tokyo)     badge     #21dc1e  1 paths
+    Nozomi (Tokyo => Hakata)     badge     #1edc5a  1 paths
+    Kodama (Nagoya => Tokyo)     badge     #dc271e  1 paths
     Kodama (Tokyo => Nagoya)     badge     #931edc  1 paths
+    Mizuho (Kagoshima-Chuo => Shin-Osaka) badge     #dc661e  1 paths
+    Mizuho (Shin-Osaka => Kagoshima-Chuo) badge     #dc1eb9  1 paths
+    Kagayaki (Tsuruga => Tokyo)  badge     #1edcd5  1 paths
+    Tsurugi                      badge     #1e6ddc  2 paths
+    Kagayaki (Tokyo => Tsuruga)  badge     #1e63dc  1 paths
+    Asama (Tokyo => Nagano)      badge     #dcac1e  1 paths
+    Asama (Nagano => Tokyo)      badge     #ccdc1e  1 paths
+    Tsubame                      badge     #00bfff  13 paths
+    JR Shinkansen (Hayabusa Train) badge     #d2dc1e  7 paths
+    JR Shinkansen (Yamabiko Train) badge     #79dc1e  4 paths
+    JR Shinkansen (Nasuno Train) badge     #dc1ebf  2 paths
     Kodama                       badge     #1ea6dc  1 paths
     Kodama                       badge     #dc531e  1 paths
+    Toki                         badge     #dc791e  2 paths
+    Tanigawa                     badge     #dc1ed8  1 paths
+    Tanigawa                     badge     #dc1e80  3 paths
+                                 badge     #8c1edc  5 paths
     Kodama                       badge     #1edc79  1 paths
     Kodama                       badge     #1eb2dc  1 paths
-shinkansen: saved 361 KB
+    Hakutaka                     badge     #1edc8f  3 paths
+shinkansen: saved 1362 KB
 finished, 0 system(s) missing, 0 left for the next night
