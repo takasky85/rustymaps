@@ -249,9 +249,6 @@ impl App {
             ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
         }
         let dragging_system = matches!(self.dnd, Some(Dnd::System(_)));
-        // As tall as the window allows (keeping clear of the mini globe in the corner, when it is shown).
-        let max_h = (rect.height() - 64.0 - if self.show_compass { 170.0 } else { 30.0 }).max(160.0);
-
         let mut toggle: Option<(usize, bool)> = None;
         let mut line_hidden: Vec<(usize, usize, bool)> = Vec::new();
         let mut all_lines: Option<(usize, bool)> = None;
@@ -262,7 +259,9 @@ impl App {
         let mut line_to_top: Option<(usize, usize)> = None;
 
         egui::Area::new(egui::Id::new("systems_here")).anchor(egui::Align2::RIGHT_TOP, egui::vec2(-10.0, 64.0)).show(ctx, |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
+            let frame = egui::Frame::popup(ui.style());
+            let pad_bottom = frame.inner_margin.bottom as f32 + frame.stroke.width + 1.0;
+            frame.show(ui, |ui| {
                 ui.set_width(300.0);
                 ui.horizontal(|ui| {
                     if fold_arrow(ui, !self.systems_folded).clicked() {
@@ -274,7 +273,9 @@ impl App {
                     return;
                 }
                 ui.small("Drag a grip to move a row, or press Top. The top row is drawn on top.");
-                egui::ScrollArea::vertical().max_height(max_h).auto_shrink([true, true]).show(ui, |ui| {
+                // the list runs down to the bottom of the window
+                let list_h = (rect.max.y - 10.0 - pad_bottom - ui.cursor().top()).max(160.0);
+                egui::ScrollArea::vertical().min_scrolled_height(list_h).max_height(list_h).auto_shrink([false, false]).show(ui, |ui| {
                     let mut groups: Vec<egui::Rect> = Vec::new();
                     for &slot in &near {
                         let open = self.systems_open.contains(&slot) && !dragging_system;
