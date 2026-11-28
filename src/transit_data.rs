@@ -422,7 +422,12 @@ pub const SYSTEMS: &[SystemConfig] = &[
         "Japan Shinkansen",
         [30.90, 129.50, 45.60, 145.90],
         "train",
-        &[r#"["name"~"Shinkansen|新幹線"]"#, r#"["network"~"Shinkansen|新幹線"]"#],
+        &[
+            r#"["name"~"Shinkansen|新幹線"]"#,
+            r#"["network"~"Shinkansen|新幹線"]"#,
+            r#"["service"="high_speed"]"#,
+            r#"["name"~"Nozomi|Hikari|Kodama|Mizuho|Sakura|Tsubame|Hayabusa|Hayate|Komachi|Yamabiko|Nasuno|Toki|Tanigawa|Asama|Kagayaki|Hakutaka|Tsurugi|Kamome|Hokuto|のぞみ|ひかり|こだま|みずほ|さくら|つばめ|はやぶさ|はやて|こまち|やまびこ|なすの|とき|たにがわ|あさま|かがやき|はくたか|つるぎ|かもめ|はくと"]["route"="train"]"#,
+        ],
         &[],
         (35.6812, 139.7671),
     ),
